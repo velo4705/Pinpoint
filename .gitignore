@@ -1,0 +1,36 @@
+# Environment Variables
+.env
+.env.local
+.env.*
+
+# Audits & Unnecessary Scripts
+argus_vision_audit.py
+vision_test.py
+explore_*.py
+audit_*.py
+*.log
+
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+backend/chroma_db/
+backend/model_cache/
+
+# Node.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+npm-debug.log*
+yarn-error.log*
+
+# IDEs & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
