@@ -10,16 +10,44 @@ interface MapProps {
   game?: string;
   gameCoords?: { x: number; z: number };
   seed?: string; // The Minecraft seed to generate the map from
+  mapStyle?: 'dark' | 'light' | 'satellite';
 }
 
-const MapComponent: React.FC<MapProps> = ({ center = [0, 20], zoom = 2, marker, mode = 'real-world', game, gameCoords, seed }) => {
+const MapComponent: React.FC<MapProps> = ({ center = [0, 20], zoom = 2, marker, mode = 'real-world', game, gameCoords, seed, mapStyle = 'dark' }) => {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
   const isMinecraft = mode === 'game' && game === 'Minecraft';
 
+  // Get Style Object/URL for MapLibre
+  const getStyleSource = (style: 'dark' | 'light' | 'satellite') => {
+    if (style === 'satellite') {
+      return {
+        version: 8 as const,
+        sources: {
+          'satellite': {
+            type: 'raster' as const,
+            tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+            tileSize: 256,
+            attribution: 'Tiles &copy; Esri'
+          }
+        },
+        layers: [{
+          id: 'satellite',
+          type: 'raster' as const,
+          source: 'satellite'
+        }]
+      };
+    }
+    return {
+      light: 'https://tiles.basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+      dark: 'https://tiles.basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+    }[style];
+  };
+
   // --- SEEDED NOISE GENERATOR (For Minecraft Procedural Map) ---
+  // ... (Procedural generation) ...
   useEffect(() => {
     if (!isMinecraft || !seed || !canvasRef.current) return;
 
@@ -73,15 +101,22 @@ const MapComponent: React.FC<MapProps> = ({ center = [0, 20], zoom = 2, marker, 
 
   const markerRef = useRef<maplibregl.Marker | null>(null);
 
+  // Initialize Map
   useEffect(() => {
     if (map.current) return;
     map.current = new maplibregl.Map({
       container: mapContainer.current!,
-      style: 'https://tiles.basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+      style: getStyleSource(mapStyle),
       center: center,
       zoom: zoom,
     });
   }, []);
+
+  // Handle Dynamic Map Style Switching
+  useEffect(() => {
+    if (!map.current) return;
+    map.current.setStyle(getStyleSource(mapStyle));
+  }, [mapStyle]);
 
   // Update real-world map when marker changes
   useEffect(() => {
@@ -98,7 +133,7 @@ const MapComponent: React.FC<MapProps> = ({ center = [0, 20], zoom = 2, marker, 
     if (markerRef.current) {
       markerRef.current.setLngLat([marker.lng, marker.lat]);
     } else {
-      markerRef.current = new maplibregl.Marker({ color: '#3b82f6' })
+      markerRef.current = new maplibregl.Marker({ color: '#ef4444' })
         .setLngLat([marker.lng, marker.lat])
         .addTo(map.current);
     }
@@ -118,14 +153,14 @@ const MapComponent: React.FC<MapProps> = ({ center = [0, 20], zoom = 2, marker, 
           {/* Procedural Marker */}
           {gameCoords && (
             <div 
-              className="absolute w-4 h-4 bg-blue-500 border-2 border-white rounded-full shadow-[0_0_20px_rgba(59,130,246,0.8)] z-20 animate-pulse"
+              className="absolute w-4 h-4 bg-red-500 border-2 border-white rounded-full shadow-[0_0_20px_rgba(239,68,68,0.8)] z-20 animate-pulse"
               style={{
                 left: `${50 + (gameCoords.x / 20)}%`,
                 top: `${50 + (gameCoords.z / 20)}%`
               }}
             />
           )}
-          <div className="absolute top-4 left-4 z-30 px-3 py-1 bg-black/50 border border-white/10 rounded-md text-[10px] font-mono uppercase tracking-widest text-blue-400">
+          <div className="absolute top-4 left-4 z-30 px-3 py-1 bg-black/50 border border-white/10 rounded-md text-[10px] font-mono uppercase tracking-widest text-red-400">
             Procedural Seed Engine: {seed}
           </div>
         </div>

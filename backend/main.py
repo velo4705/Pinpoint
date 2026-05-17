@@ -37,15 +37,20 @@ async def get_history():
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Form
 
 @app.post("/scan")
-async def scan_image(file: UploadFile = File(...), mode: str = Form("real-world"), game: str = Form(None)):
+async def scan_image(
+    file: UploadFile = File(...), 
+    mode: str = Form("real-world"), 
+    game: str = Form(None),
+    model: str = Form("auto")
+):
     try:
         contents = await file.read()
         engine = get_engine()
         
         if mode == "real-world":
-            result = engine.scan_real_world(contents)
+            result = engine.scan_real_world(contents, model=model)
         else:
-            result = engine.scan_game(contents, game or "Generic")
+            result = engine.scan_game(contents, game or "Generic", model=model)
             
         if "error" not in result:
             # Add to Discovery Vault

@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <!-- Definitions for Gradients, Shadows, and Blur -->
+  <defs>
+    <!-- Background Radial Glow -->
+    <radialGradient id="bg-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ff0055" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#ff0055" stop-opacity="0"/>
+    </radialGradient>
+    
+    <!-- Locator Pin 3D Gradient (Deep Crimson to Vibrant Hot Pink-Red) -->
+    <linearGradient id="pin-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff387d"/>
+      <stop offset="40%" stop-color="#e50914"/>
+      <stop offset="100%" stop-color="#80000a"/>
+    </linearGradient>
+
+    <!-- Glowing Core Lens -->
+    <radialGradient id="inner-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="40%" stop-color="#ff4757" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#ff0055" stop-opacity="0"/>
+    </radialGradient>
+    
+    <!-- Tech Radar Lines Gradient -->
+    <linearGradient id="radar-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ff4757" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#ff4757" stop-opacity="0.05"/>
+    </linearGradient>
+
+    <!-- Drop Shadow / Glow for Pin -->
+    <filter id="glow-filter" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#ff0055" flood-opacity="0.6"/>
+    </filter>
+  </defs>
+
+  <!-- Background Radar Grid Details -->
+  <g opacity="0.8">
+    <!-- Circular Radar Rings -->
+    <circle cx="256" cy="420" r="96" fill="none" stroke="url(#radar-grad)" stroke-width="1.5" stroke-dasharray="4 8"/>
+    <circle cx="256" cy="420" r="56" fill="none" stroke="url(#radar-grad)" stroke-width="2"/>
+    <circle cx="256" cy="420" r="24" fill="none" stroke="url(#radar-grad)" stroke-width="1" opacity="0.4"/>
+    
+    <!-- Radar Grid Axis -->
+    <line x1="120" y1="420" x2="392" y2="420" stroke="url(#radar-grad)" stroke-width="1.5" stroke-dasharray="2 4"/>
+    <line x1="256" y1="284" x2="256" y2="490" stroke="url(#radar-grad)" stroke-width="1.5" stroke-dasharray="2 4"/>
+    
+    <!-- Diagonal Scanning Tech Vectors -->
+    <line x1="160" y1="324" x2="352" y2="516" stroke="url(#radar-grad)" stroke-width="1" opacity="0.25"/>
+    <line x1="352" y1="324" x2="160" y2="516" stroke="url(#radar-grad)" stroke-width="1" opacity="0.25"/>
+  </g>
+
+  <!-- Ground Target Impulse Shadow -->
+  <ellipse cx="256" cy="430" rx="48" ry="14" fill="#000" opacity="0.5" />
+  <ellipse cx="256" cy="430" rx="24" ry="7" fill="#ff0055" opacity="0.7" filter="blur(4px)"/>
+
+  <!-- Radial Background Glow Behind Pin -->
+  <circle cx="256" cy="220" r="200" fill="url(#bg-glow)"/>
+
+  <!-- THE LOCATOR PIN -->
+  <g filter="url(#glow-filter)">
+    <!-- 1. Outer Metallic Bevel / Shell -->
+    <path d="M 256,430 
+             C 244,414 136,276 136,196 
+             A 120,120 0 0,1 376,196 
+             C 376,276 268,414 256,430 Z" 
+          fill="url(#pin-grad)" 
+          stroke="#ff6b81" 
+          stroke-width="3.5"/>
+          
+    <!-- 2. Dark Carbon Chamber (Holds the Lens) -->
+    <circle cx="256" cy="196" r="54" fill="#0a0b10" stroke="#ffffff" stroke-width="2.5" stroke-opacity="0.9"/>
+    
+    <!-- 3. Futuristic Glass Inner Lens (Glowing Core) -->
+    <circle cx="256" cy="196" r="46" fill="url(#inner-glow)"/>
+    
+    <!-- 4. Target Crosshair / Reticle Details inside Lens -->
+    <circle cx="256" cy="196" r="28" fill="none" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.8"/>
+    <line x1="256" y1="162" x2="256" y2="176" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.8"/>
+    <line x1="256" y1="216" x2="256" y2="230" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.8"/>
+    <line x1="222" y1="196" x2="236" y2="196" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.8"/>
+    <line x1="276" y1="196" x2="290" y2="196" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.8"/>
+    
+    <!-- 5. Central Optical Laser Dot -->
+    <circle cx="256" cy="196" r="5" fill="#ffffff"/>
+  </g>
+
+  <!-- Futuristic Tech HUD Callout detailing system coordinate lock -->
+  <path d="M 345,110 L 405,60 L 475,60" fill="none" stroke="#ff4757" stroke-width="2" stroke-opacity="0.7"/>
+  <circle cx="345" cy="110" r="3.5" fill="#ff4757"/>
+  <text x="410" y="52" fill="#ff4757" font-family="monospace" font-size="13" font-weight="bold" letter-spacing="1" opacity="0.9">SYS.LOCK // 44.106</text>
+</svg>

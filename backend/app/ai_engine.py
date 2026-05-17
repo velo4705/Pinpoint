@@ -148,10 +148,10 @@ class AIEngine:
         
         return loc, x, y, z, ver, dim, seed
 
-    def scan_real_world(self, image_bytes):
+    def scan_real_world(self, image_bytes, model="auto"):
         # 1. EXACT IMAGE HASH CACHE
         img_hash = hashlib.md5(image_bytes).hexdigest()
-        img_cache_key = f"pinpoint:img:{img_hash}"
+        img_cache_key = f"pinpoint:img:{img_hash}:{model}" # Cache is model-aware now!
         
         if self.redis:
             cached_result = self.redis.get(img_cache_key)
@@ -163,31 +163,54 @@ class AIEngine:
         base64_img = base64.b64encode(image_bytes).decode('utf-8')
         hint, source = None, "Unknown"
         
-        # TIER 1: Gemini 3.1 Flash-Lite
-        hint = self.hub.call_gemini(base64_img, self.hub.gemini_lead)
-        if hint: source = f"Gemini({self.hub.gemini_lead})"
-        
-        # TIER 2: Groq Llama 4 Scout
-        if not hint:
+        if model == "gemini-only":
+            hint = self.hub.call_gemini(base64_img, self.hub.gemini_lead)
+            if hint:
+                source = f"Gemini({self.hub.gemini_lead}) [Gemini-Only]"
+            else:
+                for m in self.hub.gemini_fleet:
+                    hint = self.hub.call_gemini(base64_img, m)
+                    if hint:
+                        source = f"Gemini({m}) [Gemini-Only]"
+                        break
+        elif model == "groq-only":
             hint = self.hub.call_groq(base64_img)
-            if hint: source = "Groq(llama-4-scout)"
-
-        # TIERS 3-9: Rest of Gemini Fleet
-        if not hint:
-            for m in self.hub.gemini_fleet:
-                hint = self.hub.call_gemini(base64_img, m)
-                if hint: source=f"Gemini({m})"; break
-                
-        # TIERS 10-13: GitHub Fleet
-        if not hint:
+            if hint: source = "Groq(llama-4-scout) [Groq-Only]"
+        elif model == "github-only":
             for m in self.hub.github_fleet:
                 hint = self.hub.call_github(base64_img, m)
-                if hint: source=f"GitHub({m})"; break
-                
-        # TIER 14: Local Bunker
-        if not hint: hint = self.hub.call_local_engine(image_bytes); source="Local"
+                if hint:
+                    source = f"GitHub({m}) [Github-Only]"
+                    break
+        elif model == "local-only":
+            hint = self.hub.call_local_engine(image_bytes)
+            if hint: source = "Local CLIP [Local AI]"
+        else: # "auto"
+            # TIER 1: Gemini 3.1 Flash-Lite
+            hint = self.hub.call_gemini(base64_img, self.hub.gemini_lead)
+            if hint: source = f"Gemini({self.hub.gemini_lead})"
+            
+            # TIER 2: Groq Llama 4 Scout
+            if not hint:
+                hint = self.hub.call_groq(base64_img)
+                if hint: source = "Groq(llama-4-scout)"
 
-        if not hint: return {"error": "All 14 channels failed."}
+            # TIERS 3-9: Rest of Gemini Fleet
+            if not hint:
+                for m in self.hub.gemini_fleet:
+                    hint = self.hub.call_gemini(base64_img, m)
+                    if hint: source=f"Gemini({m})"; break
+                    
+            # TIERS 10-13: GitHub Fleet
+            if not hint:
+                for m in self.hub.github_fleet:
+                    hint = self.hub.call_github(base64_img, m)
+                    if hint: source=f"GitHub({m})"; break
+                    
+            # TIER 14: Local Bunker
+            if not hint: hint = self.hub.call_local_engine(image_bytes); source="Local"
+
+        if not hint: return {"error": f"Requested scanner '{model}' failed to process image."}
 
         clean_hint = self.sanitize_location(hint)
         
@@ -240,10 +263,10 @@ class AIEngine:
         
         return {"error": f"Map lock failed. AI predicted: '{clean_hint}'"}
 
-    def scan_game(self, image_bytes, game_name):
+    def scan_game(self, image_bytes, game_name, model="auto"):
         # 1. EXACT IMAGE HASH CACHE
         img_hash = hashlib.md5(image_bytes).hexdigest()
-        img_cache_key = f"pinpoint:game:{img_hash}"
+        img_cache_key = f"pinpoint:game:{img_hash}:{model}"
         
         if self.redis:
             cached_result = self.redis.get(img_cache_key)
@@ -255,17 +278,36 @@ class AIEngine:
         base64_img = base64.b64encode(image_bytes).decode('utf-8')
         hint, source = None, "Unknown"
         
-        hint = self.hub.call_groq(base64_img, mode="game", game=game_name)
-        if not hint:
+        if model == "gemini-only":
             for m in self.hub.gemini_fleet:
                 hint = self.hub.call_gemini(base64_img, m, mode="game", game=game_name)
-                if hint: source=f"Gemini({m})"; break
-        if not hint:
+                if hint:
+                    source = f"Gemini({m}) [Gemini-Only]"
+                    break
+        elif model == "groq-only":
+            hint = self.hub.call_groq(base64_img, mode="game", game=game_name)
+            if hint: source = "Groq(llama-4-scout) [Groq-Only]"
+        elif model == "github-only":
             for m in self.hub.github_fleet:
                 hint = self.hub.call_github(base64_img, m, mode="game", game=game_name)
-                if hint: source=f"GitHub({m})"; break
+                if hint:
+                    source = f"GitHub({m}) [Github-Only]"
+                    break
+        elif model == "local-only":
+            hint = self.hub.call_local_engine(image_bytes)
+            if hint: source = "Local CLIP [Local AI]"
+        else: # "auto"
+            hint = self.hub.call_groq(base64_img, mode="game", game=game_name)
+            if not hint:
+                for m in self.hub.gemini_fleet:
+                    hint = self.hub.call_gemini(base64_img, m, mode="game", game=game_name)
+                    if hint: source=f"Gemini({m})"; break
+            if not hint:
+                for m in self.hub.github_fleet:
+                    hint = self.hub.call_github(base64_img, m, mode="game", game=game_name)
+                    if hint: source=f"GitHub({m})"; break
                 
-        if not hint: return {"error": "All channels failed to process virtual environment."}
+        if not hint: return {"error": f"Requested virtual scanner '{model}' failed to process environment."}
 
         # 3. PARSE GAME INTELLIGENCE
         loc, x, y, z, ver, dim, seed = self.parse_game_response(hint, game_name)

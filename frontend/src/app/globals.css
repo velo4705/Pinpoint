@@ -6,7 +6,7 @@
   --border: #e2e8f0;
   --text: #0f172a;
   --text-muted: #64748b;
-  --blue: #3b82f6;
+  --accent: #ef4444;
   --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
 }
 
@@ -53,7 +53,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--blue);
+  background: var(--accent);
 }
 
 @keyframes scanner-line {
@@ -63,7 +63,7 @@ body {
 }
 
 .scan-line {
-  background: linear-gradient(to bottom, transparent, var(--blue), transparent);
+  background: linear-gradient(to bottom, transparent, var(--accent), transparent);
   height: 2px;
   width: 100%;
   position: absolute;
