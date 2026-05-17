@@ -53,7 +53,8 @@ const Scanner: React.FC<ScannerProps> = ({ onScanResult, onScanStart, onModeChan
       formData.append('mode', mode);
       if (mode === 'game') formData.append('game', selectedGame);
 
-      const response = await axios.post('http://localhost:8000/scan', formData);
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const response = await axios.post(`${apiUrl}/scan`, formData);
       const data = response.data;
       clearInterval(timerInterval);
       setIsScanning(false);
