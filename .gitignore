@@ -3,11 +3,13 @@
 .env.local
 .env.*
 
-# Audits & Unnecessary Scripts
-argus_vision_audit.py
-vision_test.py
-explore_*.py
-audit_*.py
+# Throwaway scripts at the repository root only. The pattern is anchored so
+# it does not swallow real source files such as backend/app/audit_brains.py.
+/argus_vision_audit.py
+/vision_test.py
+/explore_*.py
+/audit_*.py
+/*_audit.py
 *.log
 
 
@@ -19,7 +21,7 @@ venv/
 env/
 .venv/
 backend/chroma_db/
-backend/model_cache/
+backend/models/
 
 # Node.js
 frontend/node_modules/

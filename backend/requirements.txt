@@ -1,10 +1,10 @@
-fastapi
-uvicorn
-python-multipart
-torch
-transformers
-pillow
-geopy
-requests
-redis
-python-dotenv
+# Core API. Kept deliberately small so a free-tier build stays fast and
+# reliable. The heavy local-model extras live in requirements-local.txt.
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32,<1.0
+python-multipart>=0.0.12
+pillow>=10.4
+geopy>=2.4
+requests>=2.32
+redis>=5.2
+python-dotenv>=1.0
