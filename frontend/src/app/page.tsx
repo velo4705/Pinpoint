@@ -7,12 +7,15 @@ import Scanner from '@/components/Scanner';
 import SettingsPanel from '@/components/SettingsPanel';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Sun, Moon, Settings, Info, History, Map as MapIcon, Crosshair, X } from 'lucide-react';
-import { fetchHistory } from '@/lib/api';
+import { fetchHistory, fetchModelCatalog, selectionToIds } from '@/lib/api';
 import { useByok } from '@/lib/useByok';
 import type {
   AccentColor,
+  ImageryDetail,
   MapStyle,
+  ModelCatalog,
   ModelChoice,
+  ModelSelection,
   ProviderSlug,
   ScanMode,
   ScanResult,
@@ -38,6 +41,9 @@ export default function Home() {
 
   const [accentColor, setAccentColor] = useState<AccentColor>('red');
   const [mapStyle, setMapStyle] = useState<MapStyle>('dark');
+  const [imageryDetail, setImageryDetail] = useState<ImageryDetail>('auto');
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [modelSelection, setModelSelection] = useState<ModelSelection>({});
   const [selectedModel, setSelectedModel] = useState<ModelChoice>('auto');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isInfoOpen, setIsInfoOpen] = useState(false);
@@ -45,10 +51,25 @@ export default function Home() {
   const [view, setView] = useState<'map' | 'scanner'>('scanner');
 
   const byok = useByok();
+  const selectedModelIds = selectionToIds(modelSelection);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchModelCatalog()
+      .then((data) => {
+        if (!cancelled) setCatalog(data);
+      })
+      .catch((error) => {
+        console.error('Model catalogue unavailable', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -127,6 +148,14 @@ export default function Home() {
           mode={scanResult?.mode ?? currentMode}
           game={scanResult?.game ?? currentGame}
           mapStyle={mapStyle}
+          imageryDetail={imageryDetail}
+          focus={
+            scanResult?.mode === 'real-world' &&
+            scanResult.coordinates.lat !== undefined &&
+            scanResult.coordinates.lng !== undefined
+              ? { lat: scanResult.coordinates.lat, lng: scanResult.coordinates.lng }
+              : undefined
+          }
         />
       </div>
 
@@ -190,6 +219,7 @@ export default function Home() {
                 currentMode={currentMode}
                 currentGame={currentGame}
                 byok={byok.keys}
+                models={selectedModelIds}
               />
             </div>
           </motion.div>
@@ -434,10 +464,15 @@ export default function Home() {
         onAccentChange={setAccentColor}
         mapStyle={mapStyle}
         onMapStyleChange={setMapStyle}
+        imageryDetail={imageryDetail}
+        onImageryDetailChange={setImageryDetail}
         selectedModel={selectedModel}
         onModelChange={setSelectedModel}
         byok={byok.keys}
         onByokChange={(slug: ProviderSlug, value: string) => byok.setKey(slug, value)}
+        catalog={catalog}
+        modelSelection={modelSelection}
+        onModelSelectionChange={setModelSelection}
         rememberKeys={byok.remember}
         onRememberChange={byok.setRemember}
         onClearKeys={byok.clear}

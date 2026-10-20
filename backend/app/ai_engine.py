@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import io
 import json
+import math
 import os
 import re
 import threading
@@ -34,7 +34,8 @@ from typing import Sequence
 import requests
 from dotenv import load_dotenv
 from geopy.geocoders import Nominatim
-from PIL import Image
+
+from app.local_model import LocalModel
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -128,50 +129,188 @@ def _tier(index: int, slug: str, model: str, game_capable: bool = True) -> Tier:
     return Tier(index=index, provider=PROVIDERS[slug], model=model, game_capable=game_capable)
 
 
-#: The canonical 14-rung ladder for real-world scans.
-#:
-#: Ordering is deliberate: the fastest reliable model that is good enough
-#: goes first, the strongest vision models follow, and the local bunker is
-#: always last so a fully offline machine still produces an answer.
-#:
-#: Note: the former "GitHub Models" rungs were removed. GitHub retired the
-#: whole GitHub Models service (playground, catalog, inference API and BYOK)
-#: on 2026-07-30, so those rungs could never fire again. Their slots are
-#: taken by current Gemini models and by OpenAI.
-REAL_WORLD_TIERS: tuple[Tier, ...] = (
-    _tier(1, "gemini", "gemini-3.1-flash-lite"),
-    _tier(2, "groq", "qwen/qwen3.8-27b"),
-    _tier(3, "openai", "gpt-4o"),
-    _tier(4, "openai", "gpt-4o-mini"),
-    _tier(5, "gemini", "gemini-3.6-flash"),
-    _tier(6, "gemini", "gemini-3.5-flash"),
-    _tier(7, "gemini", "gemini-3.7-flash"),
-    _tier(8, "gemini", "gemini-3.8-flash"),
-    _tier(9, "gemini", "gemini-3.5-flash-lite"),
-    _tier(10, "gemini", "gemini-3-flash-preview"),
-    _tier(11, "gemini", "gemini-2.5-flash"),
-    _tier(12, "gemini", "gemini-2.5-flash-lite"),
-    _tier(13, "gemini", "gemini-3.1-pro-preview"),
-    _tier(14, "local", "clip-vit-base-patch32", game_capable=False),
+# --------------------------------------------------------------------------
+# Model catalogue
+# --------------------------------------------------------------------------
+#
+# One source of truth for which models exist, what they are called, and where
+# they sit in the fallback ladder. The ladder is generated from this, so a
+# model can never be offered in the UI without also being reachable, and the
+# two can never drift apart.
+#
+# The tier order is by *measured accuracy*, not by cost. A fast, cheap model
+# that answers confidently and wrongly is far more damaging than a slow one
+# that is right, so the cheap-and-shaky rungs sit near the bottom.
+#
+# On an eight-image benchmark of geotagged Commons photos, leading with
+# `gemini-2.5-flash` put 7/8 answers inside 25 km of the truth, while the
+# old ladder -- which tried `gemini-3.1-flash-lite` and then Groq -- put
+# only 3/8 there and sent Porto to Buenos Aires and Marrakesh to Kabul.
+#
+# Note: the former "GitHub Models" rungs were removed. GitHub retired the
+# whole GitHub Models service (playground, catalog, inference API and BYOK)
+# on 2026-07-30, so those rungs could never fire again.
+
+
+@dataclass(frozen=True)
+class ModelEntry:
+    """One selectable model."""
+
+    id: str
+    label: str
+    note: str = ""
+    tier: int = 99
+    game_capable: bool = True
+
+    @property
+    def qualified(self) -> str:
+        """The ``provider:model`` form used by the API and the UI."""
+        return f"{self.provider}:{self.id}"
+
+
+@dataclass(frozen=True)
+class ProviderCatalogue:
+    """A provider and the models it offers."""
+
+    slug: str
+    label: str
+    key_env: str | None
+    hint: str
+    models: tuple[ModelEntry, ...]
+
+
+MODEL_CATALOGUE: tuple[ProviderCatalogue, ...] = (
+    ProviderCatalogue(
+        slug="gemini",
+        label="Gemini",
+        key_env="GOOGLE_API_KEY",
+        hint="Google DeepMind",
+        models=(
+            ModelEntry("gemini-3.1-pro-preview", "3.1 Pro", "strongest; preview, quota-limited", tier=1),
+            ModelEntry("gemini-2.5-flash", "2.5 Flash", "best measured accuracy", tier=3),
+            ModelEntry("gemini-3.6-flash", "3.6 Flash", "fast", tier=4),
+            ModelEntry("gemini-3.5-flash", "3.5 Flash", "fast", tier=5),
+            ModelEntry("gemini-3.7-flash", "3.7 Flash", "fast", tier=6),
+            ModelEntry("gemini-3.8-flash", "3.8 Flash", "fast", tier=7),
+            ModelEntry("gemini-2.5-flash-lite", "2.5 Flash-Lite", "cheapest workhorse", tier=9),
+            ModelEntry("gemini-3.1-flash-lite", "3.1 Flash-Lite", "very fast", tier=10),
+            ModelEntry("gemini-3-flash-preview", "3 Flash", "preview", tier=11),
+            ModelEntry("gemini-3.1-flash-lite-preview", "3.1 Flash-Lite", "preview", tier=12),
+        ),
+    ),
+    ProviderCatalogue(
+        slug="openai",
+        label="OpenAI",
+        key_env="OPENAI_API_KEY",
+        hint="GPT vision family",
+        models=(
+            ModelEntry("gpt-6-astra", "GPT-6 Astra", "flagship, strongest", tier=2),
+            ModelEntry("gpt-6.1-sol", "GPT-6.1 Sol", "balanced", tier=8),
+            ModelEntry("gpt-6-luna", "GPT-6 Luna", "cheapest, fastest", tier=14),
+            ModelEntry("gpt-4o", "GPT-4o", "legacy; retires 2027-01-14", tier=15),
+            ModelEntry("gpt-4o-mini", "GPT-4o mini", "legacy; retires 2027-01-14", tier=16),
+        ),
+    ),
+    ProviderCatalogue(
+        slug="groq",
+        label="Groq",
+        key_env="GROQ_API_KEY",
+        hint="fastest inference",
+        models=(
+            ModelEntry("qwen/qwen3.8-27b", "Qwen 3.8 27B", "fast; least reliable at geolocation", tier=13),
+        ),
+    ),
+    ProviderCatalogue(
+        slug="local",
+        label="Local",
+        key_env=None,
+        hint="offline, no key, no cost",
+        models=(
+            ModelEntry("auto", "Auto", "GeoCLIP if installed, else CLIP", tier=17, game_capable=False),
+            ModelEntry("geoclip", "GeoCLIP", "accurate; returns coordinates", tier=17, game_capable=False),
+            ModelEntry("clip", "CLIP zero-shot", "lightweight; names only", tier=17, game_capable=False),
+        ),
+    ),
 )
 
-#: Game mode reorders the ladder: the local bunker cannot crack a seed, and
-#: the fastest vision model is the best first guess.
-GAME_TIERS: tuple[Tier, ...] = (
-    _tier(1, "groq", "qwen/qwen3.8-27b"),
-    _tier(2, "openai", "gpt-4o"),
-    _tier(3, "openai", "gpt-4o-mini"),
-    _tier(4, "gemini", "gemini-3.1-flash-lite"),
-    _tier(5, "gemini", "gemini-3.6-flash"),
-    _tier(6, "gemini", "gemini-3.5-flash"),
-    _tier(7, "gemini", "gemini-3.7-flash"),
-    _tier(8, "gemini", "gemini-3.8-flash"),
-    _tier(9, "gemini", "gemini-3.5-flash-lite"),
-    _tier(10, "gemini", "gemini-3-flash-preview"),
-    _tier(11, "gemini", "gemini-2.5-flash"),
-    _tier(12, "gemini", "gemini-2.5-flash-lite"),
-    _tier(13, "gemini", "gemini-3.1-pro-preview"),
+
+def _build_ladder() -> tuple[Tier, ...]:
+    """Generate the tier ladder from the catalogue."""
+    tiers: list[Tier] = []
+    for provider in MODEL_CATALOGUE:
+        if provider.slug == "local":
+            continue
+        for entry in provider.models:
+            tiers.append(
+                Tier(
+                    index=entry.tier,
+                    provider=PROVIDERS[provider.slug],
+                    model=entry.id,
+                    game_capable=entry.game_capable,
+                )
+            )
+    tiers.sort(key=lambda tier: (tier.index, tier.provider.slug))
+    # Renumber so the ladder reads 1..N whatever the catalogue says.
+    return tuple(
+        Tier(index=position, provider=tier.provider, model=tier.model, game_capable=tier.game_capable)
+        for position, tier in enumerate(tiers, start=1)
+    )
+
+
+#: The canonical ladder for real-world scans.
+REAL_WORLD_TIERS: tuple[Tier, ...] = _build_ladder()
+
+#: Game mode drops the local bunker, which cannot crack a seed.
+GAME_TIERS: tuple[Tier, ...] = tuple(
+    tier for tier in REAL_WORLD_TIERS if tier.game_capable
 )
+
+def catalogue_for_api() -> dict:
+    """The catalogue, shaped for the frontend."""
+    return {
+        "providers": [
+            {
+                "slug": provider.slug,
+                "label": provider.label,
+                "hint": provider.hint,
+                "keyEnv": provider.key_env,
+                "models": [
+                    {
+                        "id": entry.id,
+                        "label": entry.label,
+                        "note": entry.note,
+                        "tier": entry.tier,
+                        "gameCapable": entry.game_capable,
+                    }
+                    for entry in provider.models
+                ],
+            }
+            for provider in MODEL_CATALOGUE
+        ]
+    }
+
+
+def parse_model_selection(raw: str | None) -> list[str]:
+    """Parse a ``provider:model,provider:model`` selection.
+
+    Returns the qualified ids in the order given. Unknown providers or models
+    are dropped rather than raising: a stale client should degrade to the
+    models that still exist, not fail the scan.
+    """
+    if not raw:
+        return []
+    known = {
+        f"{provider.slug}:{entry.id}"
+        for provider in MODEL_CATALOGUE
+        for entry in provider.models
+    }
+    chosen: list[str] = []
+    for part in raw.split(","):
+        candidate = part.strip()
+        if candidate in known and candidate not in chosen:
+            chosen.append(candidate)
+    return chosen
+
 
 #: ``model`` values the API accepts.
 MODEL_CHOICES: tuple[str, ...] = (
@@ -273,9 +412,15 @@ def key_scope(effective_keys: dict[str, str]) -> str:
 # --------------------------------------------------------------------------
 
 REAL_WORLD_PROMPT = (
-    "Identify the location in this image. You MUST respond with ONLY the location "
-    "name in this exact format: [NAME: City, Country]. Do NOT provide any description, "
-    "reasoning, or extra text."
+    "You are a geolocation analyst. Study this photograph and determine the most "
+    "specific real-world location it was taken at. Prefer the finest granularity you "
+    "can actually justify: a specific landmark, building, street, park or neighbourhood "
+    "over a city, and a city over a country. Use visual evidence only (architecture, "
+    "signage, terrain, vegetation, road markings, light); do not guess a famous place "
+    "unless the evidence supports it. Answer in exactly this format and nothing else:\n"
+    "[NAME: Most specific place name, City, Country] [LAT: decimal degrees] "
+    "[LNG: decimal degrees]\n"
+    "If you are not confident, still give your single best estimate for LAT and LNG."
 )
 
 
@@ -292,209 +437,15 @@ def game_prompt(game: str) -> str:
 
 
 # --------------------------------------------------------------------------
-# Local CLIP bunker
+# Local model (GeoCLIP, or CLIP zero-shot as a fallback)
 # --------------------------------------------------------------------------
 
-#: A deliberately wide, visually distinctive label set. CLIP is a *weak*
-#: geolocator, so the label set is the main lever on its accuracy.
-LOCAL_LABELS: tuple[str, ...] = (
-    "Manarola, Italy",
-    "Cinque Terre, Italy",
-    "Santorini, Greece",
-    "Sagrada Familia, Barcelona, Spain",
-    "Alhambra, Granada, Spain",
-    "Colosseum, Rome, Italy",
-    "Eiffel Tower, Paris, France",
-    "Louvre, Paris, France",
-    "Big Ben, London, United Kingdom",
-    "Tower Bridge, London, United Kingdom",
-    "Times Square, New York, United States",
-    "Golden Gate Bridge, San Francisco, United States",
-    "Statue of Liberty, New York, United States",
-    "Grand Canyon, Arizona, United States",
-    "Hollywood Sign, Los Angeles, United States",
-    "CN Tower, Toronto, Canada",
-    "Christ the Redeemer, Rio de Janeiro, Brazil",
-    "Machu Picchu, Peru",
-    "Taj Mahal, Agra, India",
-    "Great Wall of China, China",
-    "Forbidden City, Beijing, China",
-    "Temple of Angkor Wat, Cambodia",
-    "Sydney Opera House, Australia",
-    "Uluru, Australia",
-    "Hagia Sophia, Istanbul, Turkey",
-    "Petra, Jordan",
-    "Pyramids of Giza, Egypt",
-    "Burj Khalifa, Dubai, United Arab Emirates",
-    "Burj Al Arab, Dubai, United Arab Emirates",
-    "Tower of London, London, United Kingdom",
-    "Brandenburg Gate, Berlin, Germany",
-    "Neuschwanstein Castle, Germany",
-    "Charles Bridge, Prague, Czech Republic",
-    "Trevi Fountain, Rome, Italy",
-    "Rialto Bridge, Venice, Italy",
-    "Pompeii, Italy",
-    "Sagrada Familia, Barcelona, Spain",
-    "Acropolis, Athens, Greece",
-    "Blue Mosque, Istanbul, Turkey",
-    "Cappadocia, Turkey",
-    "Hobbiton, New Zealand",
-    "Uluru Kata Tjuta, Australia",
-    "Cape Town, South Africa",
-    "Table Mountain, Cape Town, South Africa",
-    "Kruger National Park, South Africa",
-    "Serra do Cipó, Brazil",
-    "Iguazu Falls, Argentina",
-    "Perito Moreno Glacier, Argentina",
-    "Torres del Paine, Chile",
-    "Hanoi, Vietnam",
-    "Angkor Wat, Cambodia",
-    "Shibuya Crossing, Tokyo, Japan",
-    "Fushimi Inari, Kyoto, Japan",
-    "Mount Fuji, Japan",
-    "Itsukushima Shrine, Japan",
-    "Seoul, South Korea",
-    "Bangkok, Thailand",
-    "Singapore, Singapore",
-    "Kuala Lumpur, Malaysia",
-    "Luang Prabang, Laos",
-    "Hanoi Old Quarter, Vietnam",
-    "Bagan, Myanmar",
-    "Taj Mahal, Agra, India",
-    "Gateway of India, Mumbai, India",
-    "Varanasi, India",
-    "Marrakesh, Morocco",
-    "Chefchaouen, Morocco",
-    "Fes, Morocco",
-    "Cape Town Stadium, South Africa",
-    "Cliffs of Moher, Ireland",
-    "Giant's Causeway, Ireland",
-    "Edinburgh Castle, Scotland",
-    "Lake District, England",
-    "Venice Grand Canal, Italy",
-    "Amsterdam Canals, Netherlands",
-    "Krujë Castle, Albania",
-    "Plitvice Lakes, Croatia",
-    "Kotor, Montenegro",
-    "Hallstatt, Austria",
-    "Salzburg, Austria",
-    "Matterhorn, Switzerland",
-    "Interlaken, Switzerland",
-    "Lofoten Islands, Norway",
-    "Bergen, Norway",
-    "Stockholm, Sweden",
-    "Copenhagen, Denmark",
-    "Kronborg Castle, Denmark",
-    "Palace of the Lost City of Petra, Jordan",
-    "Easter Island, Chile",
-    "Machu Picchu, Cusco Region, Peru",
-    "Salar de Uyuni, Bolivia",
-    "Atacama Desert, Chile",
-)
-
-#: Prompt ensemble -- averaging several phrasings measurably improves CLIP
-#: zero-shot accuracy over a single template.
-LOCAL_TEMPLATES: tuple[str, ...] = (
-    "a photo of {}",
-    "a photo taken in {}",
-    "a photo of the landmark {}",
-)
-
-_LOCAL_MODEL = None
-_LOCAL_PROCESSOR = None
-_LOCAL_LOCK = threading.Lock()
+local_model = LocalModel()
 
 
 def local_model_available() -> bool:
-    """True when the optional local-model extras are importable."""
-    try:
-        import torch  # noqa: F401
-        import transformers  # noqa: F401
-    except Exception:
-        return False
-    return True
-
-
-def _init_local_bunker():
-    """Lazily load CLIP. Returns ``(model, processor)`` or ``(None, None)``."""
-    global _LOCAL_MODEL, _LOCAL_PROCESSOR
-    if _LOCAL_MODEL is not None:
-        return _LOCAL_MODEL, _LOCAL_PROCESSOR
-    with _LOCAL_LOCK:
-        if _LOCAL_MODEL is not None:
-            return _LOCAL_MODEL, _LOCAL_PROCESSOR
-        try:
-            os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
-            os.environ.setdefault("HF_HOME", MODEL_CACHE_DIR)
-            os.environ.setdefault("HUGGINGFACE_HUB_CACHE", os.path.join(MODEL_CACHE_DIR, "hub"))
-            os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(MODEL_CACHE_DIR, "transformers"))
-            from transformers import CLIPModel, CLIPProcessor
-
-            model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-            processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-            model.eval()
-            _LOCAL_MODEL, _LOCAL_PROCESSOR = model, processor
-        except Exception as exc:  # pragma: no cover - environment dependent
-            print(f"[local] bunker unavailable: {type(exc).__name__}: {exc}")
-            return None, None
-    return _LOCAL_MODEL, _LOCAL_PROCESSOR
-
-
-def _as_feature_tensor(output):
-    """Extract the feature tensor from a CLIP output.
-
-    ``transformers`` v5 returns a ``BaseModelOutputWithPooling`` whose
-    ``pooler_output`` holds the projected features; v4 returned the tensor
-    directly. Support both so the bunker is not pinned to one release.
-    """
-    import torch
-
-    if isinstance(output, torch.Tensor):
-        return output
-    for attribute in ("pooler_output", "last_hidden_state", "text_embeds", "image_embeds"):
-        value = getattr(output, attribute, None)
-        if isinstance(value, torch.Tensor):
-            return value
-    if isinstance(output, (tuple, list)) and output and isinstance(output[0], torch.Tensor):
-        return output[0]
-    raise TypeError(f"unrecognised CLIP feature output: {type(output).__name__}")
-
-
-def call_local_engine(image_bytes: bytes) -> tuple[str | None, float]:
-    """Classify an image with the local CLIP bunker.
-
-    Returns ``(label, score)`` where ``score`` is the model's confidence in
-    that label, or ``(None, 0.0)`` when the bunker is unavailable.
-    """
-    model, processor = _init_local_bunker()
-    if model is None or processor is None:
-        return None, 0.0
-    try:
-        import torch
-
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        prompts = [tpl.format(label) for label in LOCAL_LABELS for tpl in LOCAL_TEMPLATES]
-        text_inputs = processor(text=prompts, return_tensors="pt", padding=True)
-        image_inputs = processor(images=image, return_tensors="pt")
-
-        with torch.no_grad():
-            text_features = _as_feature_tensor(model.get_text_features(**text_inputs))
-            image_features = _as_feature_tensor(model.get_image_features(**image_inputs))
-
-            n_templates = len(LOCAL_TEMPLATES)
-            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-            text_features = text_features.reshape(len(LOCAL_LABELS), n_templates, -1).mean(dim=1)
-            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-
-            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-            logits = (image_features @ text_features.T) * 100.0
-            probs = logits.softmax(dim=-1)[0]
-            best_idx = int(probs.argmax().item())
-
-        return LOCAL_LABELS[best_idx], float(probs[best_idx].item())
-    except Exception as exc:  # pragma: no cover - environment dependent
-        print(f"[local] inference failed: {type(exc).__name__}: {exc}")
-        return None, 0.0
+    """True when an offline geolocator can be used at all."""
+    return local_model.available()
 
 
 # --------------------------------------------------------------------------
@@ -784,6 +735,49 @@ class Geocoder:
             query, addressdetails=True, language="en", timeout=10, exactly_one=True
         )
 
+    def reverse(self, lat: float, lng: float) -> str | None:
+        """Turn a coordinate into a readable place name.
+
+        The local model answers with coordinates and no name, so a reverse
+        lookup is what gives the operator something recognisable. geopy's
+        ``reverse()`` returns the address as a flat string, so the raw
+        Nominatim JSON is used to pick the most useful level.
+        """
+        self._wait_turn()
+        url = (
+            "https://nominatim.openstreetmap.org/reverse"
+            f"?lat={lat:.6f}&lon={lng:.6f}&format=jsonv2&addressdetails=1&zoom=14"
+        )
+        try:
+            response = requests.get(
+                url,
+                headers={"User-Agent": "pinpoint-os/2.0 (+https://github.com/velo4705)"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                return None
+            payload = response.json()
+        except Exception:
+            return None
+
+        address = payload.get("address") or {}
+        name = (
+            address.get("city")
+            or address.get("town")
+            or address.get("village")
+            or address.get("municipality")
+            or address.get("county")
+            or address.get("state")
+            or payload.get("name")
+        )
+        country = address.get("country")
+        if name and country:
+            return f"{name}, {country}"
+        if name:
+            return str(name)
+        display = payload.get("display_name")
+        return str(display) if display else None
+
 
 # --------------------------------------------------------------------------
 # Engine
@@ -798,6 +792,89 @@ class Prediction:
     source: str
     tier: int
     confidence: float
+
+
+@dataclass
+class Vote:
+    """One model's answer, resolved to coordinates."""
+
+    coordinates: tuple[float, float]
+    source: str
+    tier: int
+    #: 'name' (forward-geocoded), 'model' (coordinates the model stated) or
+    #: 'both' (the two agreed).
+    origin: str
+    label: str
+
+
+#: Two answers within this distance of each other are treated as agreeing.
+AGREEMENT_KM = 75.0
+
+#: How many models a single scan may consult. Independent agreement is what
+#: makes the result trustworthy, so this is deliberately greater than one.
+DEFAULT_VERIFY_MODELS = 3
+
+#: Ceiling on an operator-supplied model selection.
+MAX_SELECTED_MODELS = 10
+
+#: Per-tier trust, used as the confidence baseline for an unconfirmed answer.
+TIER_TRUST = {
+    "gemini": 0.78,
+    "openai": 0.78,
+    "groq": 0.45,
+    "local": 0.35,
+}
+
+
+def parse_model_coordinates(text: str) -> tuple[float, float] | None:
+    """Pull the model's own ``[LAT: ...] [LNG: ...]`` estimate out of a reply.
+
+    This is a second, independent signal from the same model: the place name
+    goes through a geocoder, while these numbers do not.
+    """
+    lat_match = re.search(r"\[LAT\s*:\s*(-?\d+(?:\.\d+)?)\]", text, re.IGNORECASE)
+    lng_match = re.search(r"\[(?:LNG|LON)\s*:\s*(-?\d+(?:\.\d+)?)\]", text, re.IGNORECASE)
+    if not lat_match or not lng_match:
+        return None
+    try:
+        lat = float(lat_match.group(1))
+        lng = float(lng_match.group(1))
+    except ValueError:
+        return None
+    if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lng <= 180.0):
+        return None
+    return lat, lng
+
+
+def haversine_km(
+    lat1: float, lon1: float, lat2: float, lon2: float
+) -> float:
+    """Great-circle distance in kilometres."""
+    radius = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+    )
+    return radius * 2 * math.asin(math.sqrt(a))
+
+
+def group_votes(votes: Sequence[Vote]) -> list[list[Vote]]:
+    """Cluster votes that agree on a location."""
+    clusters: list[list[Vote]] = []
+    for vote in votes:
+        for cluster in clusters:
+            if any(
+                haversine_km(vote.coordinates[0], vote.coordinates[1], member.coordinates[0], member.coordinates[1])
+                <= AGREEMENT_KM
+                for member in cluster
+            ):
+                cluster.append(vote)
+                break
+        else:
+            clusters.append([vote])
+    return clusters
 
 
 class AIEngine:
@@ -923,21 +1000,6 @@ class AIEngine:
         keys: dict[str, str],
     ) -> Prediction | None:
         provider = tier.provider
-        if provider.style == LOCAL:
-            label, score = call_local_engine(image_bytes)
-            if not label:
-                return None
-            # CLIP's zero-shot softmax is not a probability of *correctness*;
-            # it is a relative score across a fixed label set. Cap it well
-            # below the cloud tiers so the UI never overstates a guess.
-            confidence = max(0.05, min(0.6, round(score, 4)))
-            return Prediction(
-                text=f"[NAME: {label}]",
-                source=f"Local CLIP ({tier.model})",
-                tier=tier.index,
-                confidence=confidence,
-            )
-
         key = keys.get(provider.slug)
         if not key:
             return None
@@ -955,8 +1017,27 @@ class AIEngine:
             confidence=0.88,
         )
 
-    def _select_tiers(self, model: str, mode: str) -> tuple[Tier, ...]:
+    def _select_tiers(
+        self, model: str, mode: str, selection: Sequence[str] | None = None
+    ) -> tuple[Tier, ...]:
+        """Pick the rungs to consult.
+
+        An explicit ``selection`` of ``provider:model`` ids wins outright:
+        the operator chose those models, and only those participate. The
+        selection keeps the order it was given, so the first one is the
+        model the engine trusts most.
+        """
         ladder = GAME_TIERS if mode == "game" else REAL_WORLD_TIERS
+
+        if selection:
+            by_key = {
+                f"{tier.provider.slug}:{tier.model}": tier
+                for tier in ladder
+            }
+            chosen = [by_key[item] for item in selection if item in by_key]
+            if chosen:
+                return tuple(chosen)
+
         if model == "auto":
             selected = ladder
         else:
@@ -975,14 +1056,29 @@ class AIEngine:
         image_bytes: bytes,
         model: str = "auto",
         byok: dict[str, str] | None = None,
+        selection: Sequence[str] | None = None,
     ) -> dict:
         keys, key_errors = self._resolve_keys(byok)
         if key_errors:
             return {"error": "Invalid API key: " + "; ".join(key_errors)}
 
+        selection = list(selection or [])
+        local_pref = "auto"
+        for item in selection:
+            if item.startswith("local:"):
+                local_pref = item.split(":", 1)[1]
+        local_model.set_preference(local_pref)
+
         scope = key_scope(keys)
         img_hash = hashlib.md5(image_bytes).hexdigest()
-        img_cache_key = f"pinpoint:img:{img_hash}:{model}:{scope}"
+        # The verify-model count changes the answer, so it belongs in the key.
+        budget = int(os.getenv("PINPOINT_VERIFY_MODELS", str(DEFAULT_VERIFY_MODELS)))
+        if selection:
+            # An explicit selection is the operator saying which models to
+            # use; honour it rather than silently consulting fewer of them.
+            budget = min(len(selection), MAX_SELECTED_MODELS)
+        selection_tag = "-".join(selection) if selection else "auto"
+        img_cache_key = f"pinpoint:img:{img_hash}:{model}:{scope}:v{budget}:{selection_tag}"
 
         if self.redis:
             cached = self.redis.get(img_cache_key)
@@ -993,46 +1089,228 @@ class AIEngine:
         b64 = base64.b64encode(image_bytes).decode("utf-8")
         deadline = time.monotonic() + SCAN_DEADLINE_SECONDS
 
-        prediction: Prediction | None = None
-        candidates: list[str] = []
-        for tier in self._select_tiers(model, "real-world"):
-            if time.monotonic() > deadline:
-                print("[scan] deadline reached -- stopping cascade")
-                break
-            attempt = self._call_tier(tier, image_bytes, b64, REAL_WORLD_PROMPT, keys)
-            if not attempt:
-                continue
-            attempt_candidates = extract_location_candidates(attempt.text)
-            if not attempt_candidates:
-                # The model answered, but not with a place ("[NAME: Unknown,
-                # Unknown]"). A non-answer is a failed rung, so keep
-                # descending the ladder rather than pinning a guess.
-                print(f"[{tier.provider.label}/{tier.model}] no usable place name -- next rung")
-                continue
-            prediction, candidates = attempt, attempt_candidates
-            break
+        # Consult several models and let agreement decide. A single confident
+        # model is not enough: on the benchmark, one fast model sent Porto to
+        # Buenos Aires and Marrakesh to Kabul, while a second opinion caught
+        # both.
+        votes: list[Vote] = []
+        consulted: list[str] = []
+        providers_used: set[str] = set()
 
-        if not prediction or not candidates:
-            return {"error": self._no_tier_message(model, keys)}
+        # 'local-only' means exactly that: consult the offline model and
+        # nothing else.
+        cloud_only = model != "local-only"
 
-        location, coords, _attempts = self._map_lock(candidates)
-        if not coords:
-            return {
-                "error": f"Map lock failed. AI predicted: '{candidates[0][:120]}'",
-                "candidates": candidates,
-            }
+        if cloud_only:
+            for tier in self._select_tiers(model, "real-world", selection):
+                if len(votes) >= budget:
+                    break
+                if time.monotonic() > deadline:
+                    print("[scan] deadline reached -- stopping cascade")
+                    break
+                # Prefer independent providers: two models from the same
+                # vendor are a weaker check than one model from each.
+                if tier.provider.slug in providers_used and len(providers_used) < budget:
+                    continue
+
+                attempt = self._call_tier(tier, image_bytes, b64, REAL_WORLD_PROMPT, keys)
+                if not attempt:
+                    continue
+                attempt_candidates = extract_location_candidates(attempt.text)
+                if not attempt_candidates:
+                    # The model answered, but not with a place ("[NAME: Unknown,
+                    # Unknown]"). A non-answer is a failed rung, so keep
+                    # descending the ladder rather than pinning a guess.
+                    print(f"[{tier.provider.label}/{tier.model}] no usable place name -- next rung")
+                    continue
+
+                providers_used.add(tier.provider.slug)
+                consulted.append(attempt.source)
+                votes.extend(self._votes_for(tier, attempt, attempt_candidates))
+
+        # The local model is free and offline, so it is consulted in every
+        # scan as an *independent* cross-check. It is deliberately not a
+        # voter: GeoCLIP is right about 20% of the time on its own, so
+        # letting it corroborate would dress a wrong answer up as
+        # confirmed. When no cloud model can be reached it is the answer.
+        local_vote: Vote | None = None
+        if local_model_available() and time.monotonic() <= deadline:
+            local_vote = self._local_vote(image_bytes)
+
+        if not votes:
+            if local_vote is None:
+                return {"error": self._no_tier_message(model, keys)}
+            votes = [local_vote]
+            consulted = [local_vote.source]
+        elif local_vote is not None:
+            consulted.append(local_vote.source)
+
+        best, support, confidence, dissent = self._consensus(votes)
+        location = best.label
+        coords = best.coordinates
+
+        insights = [f"Source: {best.source}", f"Tier: {best.tier}"]
+        if support > 1:
+            insights.append(f"Corroborated by {support} models")
+        if dissent:
+            insights.append(f"{dissent} model(s) disagreed")
+        if local_vote is not None:
+            gap = haversine_km(
+                local_vote.coordinates[0],
+                local_vote.coordinates[1],
+                coords[0],
+                coords[1],
+            )
+            if gap <= AGREEMENT_KM:
+                insights.append(f"Local {local_vote.source.split(' ')[-1]} agrees")
+            else:
+                insights.append(f"Local model differs by {gap:,.0f} km")
 
         result = {
             "location": location,
             "coordinates": {"lat": coords[0], "lng": coords[1]},
-            "confidence": self._confidence_for(prediction, location),
-            "source": prediction.source,
-            "tier": prediction.tier,
+            "confidence": confidence,
+            "source": best.source,
+            "tier": best.tier,
+            "support": support,
+            "consulted": consulted,
             "mode": "real-world",
-            "insights": [f"Source: {prediction.source}", f"Tier: {prediction.tier}"],
+            "insights": insights,
         }
         self._store_caches(img_cache_key, location, coords, result)
         return result
+
+    def _votes_for(
+        self, tier: Tier, prediction: Prediction, candidates: list[str]
+    ) -> list[Vote]:
+        """Turn one model's reply into a single vote.
+
+        A reply carries two readings of the same opinion: the place name
+        (which goes through the geocoder) and the coordinates the model
+        stated outright. They are *not* independent, so they must never be
+        counted as two votes -- otherwise one model could outvote another.
+
+        When they agree, the model's own coordinates win, because they are
+        the more precise of the two. When they disagree, the geocoded name
+        wins, because a name that resolves to a real place is more
+        trustworthy than coordinates the model asserted.
+        """
+        model_coords = parse_model_coordinates(prediction.text)
+        geocoded_name, geocoded_coords, _attempts = self._map_lock(candidates)
+
+        if geocoded_coords:
+            if model_coords:
+                distance = haversine_km(
+                    model_coords[0], model_coords[1], geocoded_coords[0], geocoded_coords[1]
+                )
+                if distance <= AGREEMENT_KM:
+                    return [
+                        Vote(
+                            coordinates=model_coords,
+                            source=prediction.source,
+                            tier=tier.index,
+                            origin="both",
+                            label=geocoded_name or candidates[0],
+                        )
+                    ]
+            return [
+                Vote(
+                    coordinates=geocoded_coords,
+                    source=prediction.source,
+                    tier=tier.index,
+                    origin="name",
+                    label=geocoded_name or candidates[0],
+                )
+            ]
+
+        if model_coords:
+            return [
+                Vote(
+                    coordinates=model_coords,
+                    source=prediction.source,
+                    tier=tier.index,
+                    origin="model",
+                    label=candidates[0],
+                )
+            ]
+        return []
+
+    def _local_vote(self, image_bytes: bytes) -> Vote | None:
+        """The offline model's opinion, as a vote.
+
+        GeoCLIP returns coordinates outright, so this vote needs no geocoder.
+        The label is reverse-geocoded when possible, because a bare
+        coordinate is not something an operator can read.
+        """
+        label, coordinates, _score, engine = local_model.predict(image_bytes)
+        if coordinates is None:
+            if not label:
+                return None
+            geocoded_name, geocoded_coords, _attempts = self._map_lock([label])
+            if not geocoded_coords:
+                return None
+            coordinates = geocoded_coords
+            label = geocoded_name or label
+        else:
+            reverse = self.geocoder.reverse(coordinates[0], coordinates[1])
+            if reverse:
+                label = reverse
+        return Vote(
+            coordinates=coordinates,
+            source=f"Local {engine}",
+            tier=14,
+            origin="model",
+            label=label,
+        )
+
+    @staticmethod
+    def _consensus(votes: Sequence[Vote]) -> tuple[Vote, int, float, int]:
+        """Pick the best-supported answer and score it honestly.
+
+        Support is counted in *distinct models*, not raw votes: one model's
+        name and its own coordinates are two readings of the same opinion, so
+        they must not be able to outvote a second model.
+
+        Returns ``(winner, support_models, confidence, dissent_models)``.
+        """
+        clusters = group_votes(votes)
+
+        def cluster_key(cluster: list[Vote]):
+            models = {vote.source for vote in cluster}
+            agreeing = any(vote.origin == "both" for vote in cluster)
+            best_tier = min(vote.tier for vote in cluster)
+            # Most independent models wins; then a model whose own signals
+            # agreed; then the strongest tier.
+            return (-len(models), -int(agreeing), best_tier)
+
+        clusters.sort(key=cluster_key)
+        winner_cluster = clusters[0]
+
+        # Prefer a vote whose own name and coordinates agreed, then the
+        # strongest tier.
+        winner = min(
+            winner_cluster,
+            key=lambda vote: (vote.origin != "both", vote.tier),
+        )
+
+        cluster_models = {vote.source for vote in winner_cluster}
+        total_models = {vote.source for vote in votes}
+        support = len(cluster_models)
+        dissent = len(total_models - cluster_models)
+
+        trust = TIER_TRUST.get(winner.source.split("(")[0].lower(), 0.5)
+        if winner.origin == "both":
+            trust = min(0.95, trust + 0.08)
+
+        if support > 1:
+            confidence = min(0.96, trust + 0.05 * (support - 1))
+        elif dissent > 0:
+            # It is the only answer, but other models disagreed with it.
+            confidence = trust * 0.7
+        else:
+            confidence = trust
+
+        return winner, support, round(confidence, 3), dissent
 
     def scan_game(
         self,
@@ -1107,21 +1385,6 @@ class AIEngine:
         if self.redis:
             self.redis.setex(img_cache_key, IMAGE_TTL_SECONDS, json.dumps(result))
         return result
-
-    @staticmethod
-    def _confidence_for(prediction: Prediction, resolved_location: str) -> float:
-        """Confidence reflects how much we actually know.
-
-        A cloud model that produced a city *and* a country is a much stronger
-        claim than one that produced a single token, so the former earns a
-        higher score. The local bunker keeps its own (low) score.
-        """
-        if prediction.source.startswith("Local"):
-            return prediction.confidence
-        confidence = prediction.confidence
-        if "," in resolved_location:
-            confidence = min(0.93, confidence + 0.05)
-        return round(confidence, 2)
 
     # -- helpers -----------------------------------------------------------
 
@@ -1198,11 +1461,12 @@ class AIEngine:
 
 
 def warm_local_bunker() -> None:
-    """Load the CLIP bunker in the background so the first scan is not slow.
+    """Load the local model in the background so the first scan is not slow.
 
-    The first load pulls roughly 600 MB of weights; doing it on a background
-    thread at startup means the bunker is warm by the time an operator needs
-    it instead of stalling their first request for two minutes.
+    The first load pulls roughly 1.7 GB of GeoCLIP weights and encodes a
+    100,000-point gallery; doing that on a background thread at startup means
+    the model is warm by the time an operator needs it, instead of stalling
+    their first request for minutes.
     """
     if not local_model_available():
         print("[local] extras not installed -- the offline bunker stays disabled")
@@ -1210,11 +1474,11 @@ def warm_local_bunker() -> None:
 
     def _warm() -> None:
         started = time.monotonic()
-        model, _ = _init_local_bunker()
-        if model is None:
+        engine = local_model.warm()
+        if engine == "none":
             print("[local] warm-up failed")
             return
-        print(f"[local] bunker warm in {time.monotonic() - started:.1f}s")
+        print(f"[local] {engine} warm in {time.monotonic() - started:.1f}s")
 
     threading.Thread(target=_warm, name="pinpoint-local-warmup", daemon=True).start()
 

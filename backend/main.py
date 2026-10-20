@@ -36,8 +36,10 @@ from app.ai_engine import (
     REAL_WORLD_TIERS,
     AIEngine,
     KeyValidationError,
+    catalogue_for_api,
     get_engine,
     local_model_available,
+    parse_model_selection,
     validate_key,
     warm_local_bunker,
 )
@@ -211,6 +213,16 @@ async def health():
     }
 
 
+@app.get("/models")
+async def list_models():
+    """The models this build can use, grouped by provider.
+
+    The frontend builds its model picker from this, so a model can never be
+    offered that the engine cannot actually reach.
+    """
+    return catalogue_for_api()
+
+
 @app.get("/history")
 async def get_history():
     return list(discovery_vault)[-10:]
@@ -312,6 +324,7 @@ async def scan_image(
     groq_key: Annotated[str, Form()] = "",
     gemini_key: Annotated[str, Form()] = "",
     openai_key: Annotated[str, Form()] = "",
+    models: Annotated[str, Form()] = "",
 ):
     _rate_limit(request)
 
@@ -322,11 +335,14 @@ async def scan_image(
 
     contents = await _read_capped(file)
     keys = _collect_keys(groq_key, gemini_key, openai_key)
+    selection = parse_model_selection(models)
 
     engine = get_engine()
     try:
         if mode == "real-world":
-            result = await run_in_threadpool(engine.scan_real_world, contents, model, keys)
+            result = await run_in_threadpool(
+                engine.scan_real_world, contents, model, keys, selection
+            )
         else:
             result = await run_in_threadpool(
                 engine.scan_game, contents, game or "Generic", model, keys

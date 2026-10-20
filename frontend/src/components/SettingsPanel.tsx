@@ -8,8 +8,12 @@ import { PROVIDER_META } from '@/lib/types';
 import type {
   AccentColor,
   ByokKeys,
+  CatalogSlug,
+  ImageryDetail,
   MapStyle,
+  ModelCatalog,
   ModelChoice,
+  ModelSelection,
   ProviderSlug,
   ProviderStatus,
 } from '@/lib/types';
@@ -21,10 +25,15 @@ interface SettingsPanelProps {
   onAccentChange: (color: AccentColor) => void;
   mapStyle: MapStyle;
   onMapStyleChange: (style: MapStyle) => void;
+  imageryDetail: ImageryDetail;
+  onImageryDetailChange: (detail: ImageryDetail) => void;
   selectedModel: ModelChoice;
   onModelChange: (model: ModelChoice) => void;
   byok: ByokKeys;
   onByokChange: (slug: ProviderSlug, value: string) => void;
+  catalog: ModelCatalog | null;
+  modelSelection: ModelSelection;
+  onModelSelectionChange: (selection: ModelSelection) => void;
   rememberKeys: boolean;
   onRememberChange: (enabled: boolean) => void;
   onClearKeys: () => void;
@@ -32,6 +41,23 @@ interface SettingsPanelProps {
 
 const ACCENTS: AccentColor[] = ['red', 'blue', 'green', 'purple', 'orange'];
 const MAP_STYLES: MapStyle[] = ['dark', 'light', 'satellite'];
+const IMAGERY_DETAILS: { value: ImageryDetail; label: string; hint: string }[] = [
+  {
+    value: 'auto',
+    label: 'Auto',
+    hint: 'Picks the sharpest imagery that exists at the scanned location',
+  },
+  {
+    value: 'balanced',
+    label: 'Balanced',
+    hint: 'Never shows a blank tile, but imagery is softer when zoomed in',
+  },
+  {
+    value: 'sharp',
+    label: 'Sharp',
+    hint: 'Sharpest city imagery, but some remote areas have no data at that depth',
+  },
+];
 const MODELS: { value: ModelChoice; label: string }[] = [
   { value: 'auto', label: 'Automatic' },
   { value: 'gemini-only', label: 'Gemini-Only' },
@@ -59,10 +85,15 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   onAccentChange,
   mapStyle,
   onMapStyleChange,
+  imageryDetail,
+  onImageryDetailChange,
   selectedModel,
   onModelChange,
   byok,
   onByokChange,
+  catalog,
+  modelSelection,
+  onModelSelectionChange,
   rememberKeys,
   onRememberChange,
   onClearKeys,
@@ -89,6 +120,23 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   };
 
   const hasKey = Boolean(byok.groq || byok.gemini || byok.openai);
+
+  // "Auto" means the engine picks its own accuracy-ordered ladder.
+  const selectionIsEmpty = Object.values(modelSelection).every(
+    (models) => !models || models.length === 0,
+  );
+
+  const toggleModel = (slug: CatalogSlug, modelId: string) => {
+    const current = modelSelection[slug] ?? [];
+    const next = current.includes(modelId)
+      ? current.filter((id) => id !== modelId)
+      : [...current, modelId];
+    onModelSelectionChange({ ...modelSelection, [slug]: next });
+  };
+
+  const selectOnly = (slug: CatalogSlug, modelId: string) => {
+    onModelSelectionChange({ ...modelSelection, [slug]: [modelId] });
+  };
 
   return (
     <AnimatePresence>
@@ -162,6 +210,90 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   </span>
                 </span>
               </label>
+
+              {/* Model selection */}
+              <div className="flex flex-col gap-3 pt-1 border-t border-[var(--border)]">
+                <div className="flex items-center justify-between">
+                  <label className="text-[9px] text-[var(--text-muted)] uppercase tracking-widest font-black flex items-center gap-2">
+                    <KeyRound className="w-3.5 h-3.5" />
+                    Models
+                  </label>
+                  {selectionIsEmpty ? (
+                    <span className="text-[8px] font-black uppercase tracking-widest text-[var(--accent)]">
+                      Auto ladder
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => onModelSelectionChange({})}
+                      className="text-[8px] font-black uppercase tracking-widest text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+                    >
+                      Reset to auto
+                    </button>
+                  )}
+                </div>
+
+                <p className="text-[8px] text-[var(--text-muted)] leading-relaxed">
+                  {selectionIsEmpty
+                    ? 'The engine consults models in its own accuracy order and goes with the answer they agree on. Pick models below to take control.'
+                    : 'Only the models you pick are consulted, in the order shown. The number is the engine’s recommended rank.'}
+                </p>
+
+                {!catalog && (
+                  <p className="text-[8px] text-[var(--text-muted)] opacity-70">
+                    Model catalogue unavailable — the API could not be reached.
+                  </p>
+                )}
+
+                {catalog?.providers.map((provider) => {
+                  const isLocal = provider.slug === 'local';
+                  const selected = modelSelection[provider.slug] ?? [];
+                  return (
+                    <div key={provider.slug} className="flex flex-col gap-2">
+                      <div className="flex items-baseline justify-between">
+                        <span className="text-[9px] font-black uppercase tracking-widest text-[var(--text)]">
+                          {provider.label}
+                        </span>
+                        <span className="text-[8px] text-[var(--text-muted)]">{provider.hint}</span>
+                      </div>
+
+                      <div className="flex flex-col gap-1 max-h-40 overflow-y-auto no-scrollbar pr-1">
+                        {provider.models.map((entry) => {
+                          const checked = selected.includes(entry.id);
+                          return (
+                            <label
+                              key={entry.id}
+                              className="flex items-start gap-2 cursor-pointer group py-0.5"
+                            >
+                              <input
+                                type={isLocal ? 'radio' : 'checkbox'}
+                                name={isLocal ? `local-engine` : undefined}
+                                checked={checked}
+                                onChange={() =>
+                                  isLocal ? selectOnly(provider.slug, entry.id) : toggleModel(provider.slug, entry.id)
+                                }
+                                className="mt-0.5 w-3 h-3 accent-[var(--accent)] cursor-pointer shrink-0"
+                              />
+                              <span className="flex flex-col min-w-0">
+                                <span className="text-[9px] font-black uppercase tracking-wider text-[var(--text)] group-hover:text-[var(--accent)] transition-colors truncate">
+                                  {entry.label}
+                                  <span className="ml-2 text-[8px] font-mono font-normal text-[var(--text-muted)]">
+                                    {entry.id}
+                                  </span>
+                                </span>
+                                {entry.note && (
+                                  <span className="text-[8px] text-[var(--text-muted)] opacity-75 leading-tight">
+                                    {entry.note}
+                                  </span>
+                                )}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
 
               <div className="flex gap-2">
                 <button
@@ -259,6 +391,31 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   </button>
                 ))}
               </div>
+            </div>
+
+            {/* Imagery detail */}
+            <div className="flex flex-col gap-3">
+              <label className="text-[9px] text-[var(--text-muted)] uppercase tracking-widest font-black">
+                Imagery Detail
+              </label>
+              <div className="grid grid-cols-3 gap-2 bg-[var(--bg)] p-1 rounded-xl border border-[var(--border)]">
+                {IMAGERY_DETAILS.map((option) => (
+                  <button
+                    key={option.value}
+                    onClick={() => onImageryDetailChange(option.value)}
+                    className={`py-2 text-[8px] font-black uppercase tracking-widest rounded-lg transition-all ${
+                      imageryDetail === option.value
+                        ? 'bg-[var(--accent)] text-white shadow-sm'
+                        : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[8px] text-[var(--text-muted)] leading-relaxed">
+                {IMAGERY_DETAILS.find((option) => option.value === imageryDetail)?.hint}
+              </p>
             </div>
 
             {/* Model selection */}

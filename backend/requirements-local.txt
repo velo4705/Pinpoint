@@ -1,12 +1,28 @@
 # Optional local-model extras.
 #
-# These enable tier 14: the offline CLIP bunker that runs entirely on the
-# machine with no API key and no network. They are deliberately kept out of
-# requirements.txt because torch is a multi-hundred-megabyte download and
-# slows a free-tier build to a crawl.
+# These enable the offline geolocator: the tier that works with no API key
+# and no network. They are deliberately kept out of requirements.txt because
+# the model weights are a multi-gigabyte download that does not fit a
+# free-tier build comfortably.
 #
 #     pip install -r requirements.txt -r requirements-local.txt
 #
 # The API starts fine without them; the local tier is simply skipped.
+#
+# Two models are supported:
+#   * geoclip  -- the official GeoCLIP release (NeurIPS 2023, MIT). It
+#     returns coordinates directly and is accurate to about a kilometre on
+#     distinctive scenes.
+#   * CLIP zero-shot -- the openai/clip-vit-base-patch32 fallback, which
+#     needs only transformers and torch.
+#
+# Note: torchvision must match the exact torch build you install, or the
+# CLIP C extension fails to load with
+# "operator torchvision::nms does not exist". Install both from the same
+# index, e.g.
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+
 torch>=2.4
+torchvision>=0.19
 transformers>=4.44
+geoclip>=1.2.2

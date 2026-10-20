@@ -17,6 +17,8 @@ interface ScannerProps {
   currentMode?: ScanMode;
   currentGame?: string;
   byok?: ByokKeys;
+  /** Which models to consult, as `provider:model` ids. */
+  models?: string[];
 }
 
 const GAMES = [
@@ -42,6 +44,7 @@ const Scanner: React.FC<ScannerProps> = ({
   currentMode = 'real-world',
   currentGame = 'Minecraft',
   byok,
+  models,
 }) => {
   const [isScanning, setIsScanning] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -84,6 +87,7 @@ const Scanner: React.FC<ScannerProps> = ({
         game: selectedGame,
         model: selectedModel,
         byok: byok ?? { groq: '', gemini: '', openai: '' },
+        models: models ?? [],
       });
 
       if (data.error) {
@@ -105,6 +109,8 @@ const Scanner: React.FC<ScannerProps> = ({
         confidence: data.confidence,
         source: data.source,
         tier: data.tier,
+        support: data.support,
+        consulted: data.consulted,
         mode,
         game: data.game,
         seed: data.seed,

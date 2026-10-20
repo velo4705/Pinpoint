@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { IMAGERY_MAX_ZOOM_CITY, IMAGERY_MAX_ZOOM_GLOBAL, probeImageryDepth } from '@/lib/imagery';
 
 interface MapProps {
   center?: [number, number];
@@ -13,6 +14,10 @@ interface MapProps {
   gameCoords?: { x: number; y: number; z: number };
   seed?: string;
   mapStyle?: 'dark' | 'light' | 'satellite';
+  /** 'auto' picks the imagery depth that actually exists at `focus`. */
+  imageryDetail?: 'auto' | 'balanced' | 'sharp';
+  /** The coordinate the view is locked to, used to probe imagery depth. */
+  focus?: { lat: number; lng: number };
 }
 
 /** Side of the schematic window, in Minecraft blocks. */
@@ -20,32 +25,44 @@ const VIEW_BLOCKS = 512;
 /** Resolution of the schematic canvas, in pixels. */
 const CANVAS_SIZE = 512;
 
-const getStyleSource = (style: 'dark' | 'light' | 'satellite') => {
-  if (style === 'satellite') {
-    return {
-      version: 8 as const,
-      sources: {
-        satellite: {
-          type: 'raster' as const,
-          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-          tileSize: 256,
-          attribution: 'Tiles &copy; Esri',
-        },
-      },
-      layers: [
-        {
-          id: 'satellite',
-          type: 'raster' as const,
-          source: 'satellite',
-        },
-      ],
-    };
-  }
-  return {
-    light: 'https://tiles.basemaps.cartocdn.com/gl/positron-gl-style/style.json',
-    dark: 'https://tiles.basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
-  }[style];
+/**
+ * Vector basemap styles.
+ *
+ * Both basemap TileJSONs declare `maxzoom: 14`. MapLibre reads that and
+ * *overzooms* the z14 tiles rather than requesting z15+, which is what we
+ * want: the z15+ tiles do not exist on these CDNs (Carto 404s, OpenFreeMap
+ * returns empty bodies), so asking for them would blank the map.
+ */
+const VECTOR_STYLES = {
+  light: 'https://tiles.basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+  dark: 'https://tiles.basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+} as const;
+
+/**
+ * Esri World Imagery.
+ *
+ * The service stops serving real imagery at a zoom that depends on where you
+ * are: z19 in most cities, z17 in deserts and open ocean, and nowhere at all
+ * in places like Greenland. Past its limit it returns a 2.5 KB grey tile with
+ * "Map data not available" printed on it.
+ *
+ * Declaring `maxzoom` makes MapLibre overzoom the deepest tile that really
+ * exists instead of fetching that placeholder -- so zooming in gives blurry
+ * imagery rather than a grey error. The value is chosen per location by
+ * `probeImageryDepth`; see `IMAGERY_MAX_ZOOM_GLOBAL` and
+ * `IMAGERY_MAX_ZOOM_CITY` in `@/lib/imagery`.
+ */
+const IMAGERY_SOURCE = {
+  type: 'raster' as const,
+  tiles: [
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  ],
+  tileSize: 256,
+  attribution: 'Tiles &copy; Esri',
 };
+
+/** Hard ceiling on the map zoom, so the view can never become a void. */
+const MAX_MAP_ZOOM = 20;
 
 const MapComponent: React.FC<MapProps> = ({
   center = [0, 20],
@@ -56,6 +73,8 @@ const MapComponent: React.FC<MapProps> = ({
   gameCoords,
   seed,
   mapStyle = 'dark',
+  imageryDetail = 'auto',
+  focus,
 }) => {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
@@ -70,6 +89,37 @@ const MapComponent: React.FC<MapProps> = ({
   const isMinecraft = mode === 'game' && game === 'Minecraft';
   const originX = gameCoords?.x;
   const originZ = gameCoords?.z;
+
+  /* ---------------------------------------------------------------- */
+  /* Imagery depth                                                     */
+  /* ---------------------------------------------------------------- */
+
+  // The depth the imagery source will overzoom from. 'auto' uses whatever
+  // the probe found; an explicit choice overrides it.
+  const [probedMaxZoom, setProbedMaxZoom] = useState(IMAGERY_MAX_ZOOM_GLOBAL);
+
+  const imageryMaxZoom =
+    imageryDetail === 'sharp'
+      ? IMAGERY_MAX_ZOOM_CITY
+      : imageryDetail === 'balanced'
+        ? IMAGERY_MAX_ZOOM_GLOBAL
+        : probedMaxZoom;
+
+  const focusLat = focus?.lat;
+  const focusLng = focus?.lng;
+
+  // In 'auto' mode, ask Esri whether the locked coordinate actually has
+  // imagery at city depth. One small probe per scan.
+  useEffect(() => {
+    if (imageryDetail !== 'auto' || focusLat === undefined || focusLng === undefined) return;
+    let cancelled = false;
+    void probeImageryDepth(focusLat, focusLng).then((depth) => {
+      if (!cancelled) setProbedMaxZoom(depth);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [imageryDetail, focusLat, focusLng]);
 
   /* ---------------------------------------------------------------- */
   /* Schematic Minecraft view                                          */
@@ -144,14 +194,72 @@ const MapComponent: React.FC<MapProps> = ({
   /* Map lifecycle                                                     */
   /* ---------------------------------------------------------------- */
 
+  /**
+   * Build the satellite style.
+   *
+   * Satellite is a hybrid: Esri imagery on the bottom, the vector basemap's
+   * place labels on top. The vector basemap's own opaque base layers are
+   * dropped so the imagery shows through, but its labels survive -- which
+   * means the map still tells you where you are even where the imagery
+   * stops.
+   *
+   * The style is assembled as an *object* rather than by swapping to the
+   * basemap URL and then adding a layer: MapLibre skips reloading a style
+   * whose URL is unchanged, so `style.load` would never fire and the
+   * imagery layer would silently never be added.
+   */
+  const buildSatelliteStyle = useCallback(async (maxzoom: number) => {
+    const base = await fetch(VECTOR_STYLES.dark).then((response) => response.json());
+    const labelLayers = (base.layers ?? []).filter((layer: { type?: string }) => layer.type === 'symbol');
+
+    return {
+      version: 8 as const,
+      glyphs: base.glyphs,
+      sprite: base.sprite,
+      sources: {
+        ...base.sources,
+        'esri-imagery': { ...IMAGERY_SOURCE, maxzoom },
+      },
+      layers: [
+        {
+          id: 'satellite-background',
+          type: 'background' as const,
+          paint: { 'background-color': '#0b0b0c' },
+        },
+        {
+          id: 'esri-imagery',
+          type: 'raster' as const,
+          source: 'esri-imagery',
+          paint: { 'raster-opacity': 1 },
+        },
+        ...labelLayers,
+      ],
+    };
+  }, []);
+
+  const applyStyle = useCallback(
+    (target: maplibregl.Map, style: 'dark' | 'light' | 'satellite', maxzoom: number) => {
+      if (style === 'satellite') {
+        void buildSatelliteStyle(maxzoom).then((styleSpec) => {
+          target.setStyle(styleSpec);
+        });
+        return;
+      }
+      target.setStyle(VECTOR_STYLES[style]);
+    },
+    [buildSatelliteStyle],
+  );
+
   useEffect(() => {
     if (map.current || !mapContainer.current) return;
 
     map.current = new maplibregl.Map({
       container: mapContainer.current,
-      style: getStyleSource(initialView.current.style),
+      style: VECTOR_STYLES.dark,
       center: initialView.current.center,
       zoom: initialView.current.zoom,
+      minZoom: 1,
+      maxZoom: MAX_MAP_ZOOM,
     });
     appliedStyle.current = initialView.current.style;
 
@@ -162,14 +270,16 @@ const MapComponent: React.FC<MapProps> = ({
     };
   }, []);
 
-  // Apply style changes. The first render already set the style during
-  // construction, so guard against fetching it twice.
+  // The satellite style depends on the imagery depth, so it is rebuilt
+  // whenever that changes.
+  const styleSignature = mapStyle === 'satellite' ? `satellite:${imageryMaxZoom}` : mapStyle;
+
   useEffect(() => {
     if (!map.current) return;
-    if (appliedStyle.current === mapStyle) return;
-    appliedStyle.current = mapStyle;
-    map.current.setStyle(getStyleSource(mapStyle));
-  }, [mapStyle]);
+    if (appliedStyle.current === styleSignature) return;
+    appliedStyle.current = styleSignature;
+    applyStyle(map.current, mapStyle, imageryMaxZoom);
+  }, [styleSignature, mapStyle, imageryMaxZoom, applyStyle]);
 
   // Move the real-world marker to the locked coordinates.
   useEffect(() => {

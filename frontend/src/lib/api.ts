@@ -1,5 +1,15 @@
 import axios from 'axios';
-import type { ByokKeys, ModelChoice, ProviderStatus, ScanMode, ScanResult, VaultEntry } from './types';
+import type {
+  ByokKeys,
+  CatalogSlug,
+  ModelCatalog,
+  ModelChoice,
+  ModelSelection,
+  ProviderStatus,
+  ScanMode,
+  ScanResult,
+  VaultEntry,
+} from './types';
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -8,6 +18,15 @@ export interface ScanOptions {
   game?: string;
   model: ModelChoice;
   byok: ByokKeys;
+  /** Which models to consult, as `provider:model` ids. */
+  models?: string[];
+}
+
+/** Flatten a per-provider selection into the `provider:model` list the API wants. */
+export function selectionToIds(selection: ModelSelection): string[] {
+  return (Object.keys(selection) as CatalogSlug[]).flatMap((slug) =>
+    (selection[slug] ?? []).map((model) => `${slug}:${model}`),
+  );
 }
 
 /** Run a scan. BYOK keys ride along with the request and are never stored. */
@@ -20,8 +39,16 @@ export async function scanImage(file: File, options: ScanOptions): Promise<ScanR
   if (options.byok.groq) form.append('groq_key', options.byok.groq);
   if (options.byok.gemini) form.append('gemini_key', options.byok.gemini);
   if (options.byok.openai) form.append('openai_key', options.byok.openai);
+  const models = options.models ?? [];
+  if (models.length) form.append('models', models.join(','));
 
   const response = await axios.post<ScanResult>(`${API_URL}/scan`, form, { timeout: 180_000 });
+  return response.data;
+}
+
+/** The models this build can use, grouped by provider. */
+export async function fetchModelCatalog(): Promise<ModelCatalog> {
+  const response = await axios.get<ModelCatalog>(`${API_URL}/models`, { timeout: 15_000 });
   return response.data;
 }
 
