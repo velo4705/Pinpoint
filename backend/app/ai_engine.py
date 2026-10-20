@@ -28,6 +28,7 @@ import os
 import re
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -714,6 +715,37 @@ def parse_game_response(
 # --------------------------------------------------------------------------
 
 
+def _is_latin_token(token: str) -> bool:
+    """True when a token contains at least one Latin letter."""
+    for character in token:
+        if not character.isalpha():
+            continue
+        try:
+            if unicodedata.name(character).startswith("LATIN"):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def latin_lead(text: str) -> str:
+    """Keep the leading Latin-script part of a place name.
+
+    Nominatim returns the local form when a place has no registered English
+    name -- "Marrakech ⵎⵕⵕⴰⴽⵯⵛ مراكش, Maroc ⵍⵎⵖⵔⵉⴱ المغرب" -- which
+    reads oddly in an English console. The leading Latin run is the name most
+    people recognise, so that is what is kept.
+    """
+    tokens = text.split()
+    kept: list[str] = []
+    for token in tokens:
+        if _is_latin_token(token):
+            kept.append(token)
+        else:
+            break
+    return " ".join(kept) if kept else text
+
+
 class Geocoder:
     """Nominatim wrapper that honours the one-request-per-second policy."""
 
@@ -746,7 +778,7 @@ class Geocoder:
         self._wait_turn()
         url = (
             "https://nominatim.openstreetmap.org/reverse"
-            f"?lat={lat:.6f}&lon={lng:.6f}&format=jsonv2&addressdetails=1&zoom=14"
+            f"?lat={lat:.6f}&lon={lng:.6f}&format=jsonv2&addressdetails=1&zoom=14&language=en"
         )
         try:
             response = requests.get(
@@ -772,11 +804,11 @@ class Geocoder:
         )
         country = address.get("country")
         if name and country:
-            return f"{name}, {country}"
+            return f"{latin_lead(str(name))}, {latin_lead(str(country))}"
         if name:
-            return str(name)
+            return latin_lead(str(name))
         display = payload.get("display_name")
-        return str(display) if display else None
+        return latin_lead(str(display)) if display else None
 
 
 # --------------------------------------------------------------------------
