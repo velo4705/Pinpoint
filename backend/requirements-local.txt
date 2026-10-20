@@ -1,0 +1,12 @@
+# Optional local-model extras.
+#
+# These enable tier 14: the offline CLIP bunker that runs entirely on the
+# machine with no API key and no network. They are deliberately kept out of
+# requirements.txt because torch is a multi-hundred-megabyte download and
+# slows a free-tier build to a crawl.
+#
+#     pip install -r requirements.txt -r requirements-local.txt
+#
+# The API starts fine without them; the local tier is simply skipped.
+torch>=2.4
+transformers>=4.44
