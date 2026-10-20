@@ -25,11 +25,12 @@ Pinpoint is a privacy-first, zero-budget, open-source tool for image geolocation
 
 ## File Structure
 - `/frontend`: Next.js web application.
-  - `/frontend/src/lib`: typed API client, BYOK store, shared types.
+  - `/frontend/src/lib`: typed API client, BYOK store, imagery-depth probe, shared types.
 - `/backend`: FastAPI neural engine.
-  - `/backend/app/ai_engine.py`: provider registry, tier ladder, parsers, local bunker.
+  - `/backend/app/ai_engine.py`: provider registry, tier ladder, consensus voting, parsers.
+  - `/backend/app/local_model.py`: the offline geolocator (GeoCLIP, with a CLIP zero-shot fallback).
   - `/backend/app/audit_brains.py`: live tier-ladder audit tool.
   - `/backend/vector_db`: Storage for game map embeddings (not yet wired up).
-  - `/backend/models`: Local AI model cache (CLIP weights).
+  - `/backend/models`: Local AI model cache (CLIP weights, GeoCLIP gallery embeddings).
 - `ROADMAP.md`: Dynamic release milestone tracking.
 - `CONTEXT.md`: High-level system architecture context.

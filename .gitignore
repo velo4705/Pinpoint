@@ -2,6 +2,8 @@
 .env
 .env.local
 .env.*
+# ...but the template is documentation, and must ship with the repo.
+!.env.example
 
 # Throwaway scripts at the repository root only. The pattern is anchored so
 # it does not swallow real source files such as backend/app/audit_brains.py.

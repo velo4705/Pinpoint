@@ -25,6 +25,17 @@ Pinpoint does **not** require you to trust a hosted instance with your model bud
 
 The same keys can be provided server-side through environment variables (see `.env.example`). A BYOK key always wins over the server's key for that provider.
 
+### Choosing the models
+
+The same panel lets you choose **which models** to run, not just which provider holds the key.
+
+* **Auto ladder** (the default) — the engine consults models in its own accuracy order and keeps the answer they agree on.
+* **Manual** — tick exactly the models you want. Only those are consulted, in the order shown, and the number beside each one is the engine's recommended rank.
+* The picker is built from the API's own `/models` endpoint, so a model can never be offered that the engine cannot reach.
+* The local model is a radio: **Auto** (GeoCLIP if installed, else CLIP), **GeoCLIP**, or **CLIP zero-shot**.
+
+A manual selection also overrides the verify budget: if you name five models, five are consulted.
+
 ---
 
 ## 🧠 14-Tier Neural Pipeline & Architecture
@@ -53,14 +64,15 @@ graph TD
 
 | Tier | Provider | Model | Notes |
 |------|----------|-------|-------|
-| 1 | Gemini | `gemini-3.1-flash-lite` | Lead. Fast, cheap, strong spatial reasoning |
-| 2 | Groq | `qwen/qwen3.8-27b` | Speed tier. Sub-second backup |
-| 3 | OpenAI | `gpt-4o` | Strongest single vision model |
-| 4 | OpenAI | `gpt-4o-mini` | Cheap, still multimodal |
-| 5–8 | Gemini | `3.6-flash`, `3.5-flash`, `3.7-flash`, `3.8-flash` | Mid fleet |
-| 9–12 | Gemini | `3.5-flash-lite`, `3-flash-preview`, `2.5-flash`, `2.5-flash-lite` | Cost floor |
-| 13 | Gemini | `gemini-3.1-pro-preview` | Strongest Gemini, slow and quota hungry |
-| 14 | Local | `clip-vit-base-patch32` | **Offline bunker.** No key, no network |
+| 1 | Gemini | `gemini-3.1-pro-preview` | Strongest Gemini; preview and quota-limited |
+| 2 | OpenAI | `gpt-6-astra` | Flagship, strongest single model |
+| 3 | Gemini | `gemini-2.5-flash` | **Best measured accuracy** in the fleet |
+| 4–7 | Gemini | `3.6-flash`, `3.5-flash`, `3.7-flash`, `3.8-flash` | Mid fleet |
+| 8 | OpenAI | `gpt-6.1-sol` | Balanced |
+| 9–12 | Gemini | `2.5-flash-lite`, `3.1-flash-lite`, `3-flash-preview`, `3.1-flash-lite-preview` | Cost floor |
+| 13 | Groq | `qwen/qwen3.8-27b` | Fast, but measured *least* reliable at geolocation |
+| 14–16 | OpenAI | `gpt-6-luna`, `gpt-4o`, `gpt-4o-mini` | `gpt-4o` retires 2027-01-14 |
+| — | Local | GeoCLIP / CLIP | **Offline.** No key, no network, no cost |
 
 Each rung is skipped automatically when its provider has no key, so the effective ladder is as long as the keys you have. A scan also carries a wall-clock budget (`SCAN_DEADLINE_SECONDS`, default 90s) so a long outage cannot hold a request open indefinitely.
 
@@ -70,32 +82,56 @@ Each rung is skipped automatically when its provider has no key, so the effectiv
 
 ## 🌟 Key Architectural Achievements
 
-### 🚀 1. The 14-Tier Federated Alliance
-Designed with a "Continuous Operation" philosophy. The engine automatically cascades through **13 cloud models** and falls back to a **local, lazy-loaded neural network (CLIP)** if the internet is fully severed.
-*   **Lead Tier:** `Gemini-3.1-flash-lite` (optimizing for high-accuracy spatial and regional reasoning).
-*   **Speed Tier:** `Groq Qwen 3.8 27B` (sub-second backup).
-*   **Offline Backup:** Local CLIP bunker running `clip-vit-base-patch32` against a 92-place label pool, with prompt ensembling.
+### 🚀 1. The Tiered Federated Alliance
+Designed with a "Continuous Operation" philosophy. The engine cascades through **16 cloud models** and falls back to a **local, offline geolocator** if the internet is fully severed.
+*   **Lead Tier:** `Gemini-3.1-pro-preview`, then `GPT-6 Astra` (strongest available reasoning).
+*   **Workhorse:** `Gemini-2.5-flash` (measured the most reliable geolocator in the fleet).
+*   **Speed Tier:** `Groq Qwen 3.8 27B` — fast, but measured the *least* reliable at geolocation, so it is consulted only after the accurate tiers are ruled out.
+*   **Offline Backup:** GeoCLIP, with a CLIP zero-shot fallback, running locally with no key at all.
 
-### 💾 2. Dual-Layer Redis Caching (Upstash & Local)
+### 🎯 2. Accuracy by Consensus
+A single model's word is not evidence. Each scan consults up to **three models** (`PINPOINT_VERIFY_MODELS`) and resolves their answers to coordinates, then goes with the answer they **agree** on. Answers within 75 km of each other are treated as agreeing, and a model that contradicts the others is reported as dissent rather than quietly discarded.
+
+Each model supplies two readings of its own opinion — the place name (resolved through the geocoder) and the coordinates it states outright. These are correlated, not independent, so they are collapsed into **one vote per model**; a lone model can never outvote a second.
+
+On a benchmark of geotagged Commons photos, this took correct answers (within 25 km of the truth) from **3/8 to 7/8**, and turned answers like *"Bruges, Belgium"* into *"Concertgebouw Brugge, Bruges, Belgium"*.
+
+The reported confidence now reflects that agreement: two models that concur score above 0.9, a lone answer from a weak model scores below 0.5, and a contested answer says so.
+
+### 💾 3. Dual-Layer Redis Caching (Upstash & Local)
 Protects API rate limits and accelerates repeated scans to **0ms latency**:
 *   **Layer 1 (Image Hash Cache):** Computes MD5 of image files. Identical pictures completely bypass the AI stack.
 *   **Layer 2 (Geocoding Cache):** Saves exact coordinates of found locations, protecting Nominatim from rate limits.
 
 Cache entries are namespaced by a one-way fingerprint of the keys that produced them, so BYOK results stay separate from shared results.
 
-### 🗺️ 3. Strict Map Lock with a Ranked Candidate Parser
+### 🗺️ 4. Strict Map Lock with a Ranked Candidate Parser
 Fuzzy administrative regions and conversational model responses (*"This image was taken at Abisko, Sweden..."*) are parsed automatically. The parser produces a **ranked list** of place candidates — the full name first, then progressively looser forms (`Paris, France`, then `Eiffel Tower, France`) — and the first candidate that geocodes wins. Non-answers such as `N/A` or `Unknown` are rejected rather than silently pinned to an arbitrary village.
 
-### 🎮 4. Cyberpunk Game-Mode & Seed Cracker (S00N)
+### 🛰️ 5. Adaptive Satellite Imagery
+Esri's World Imagery is a mosaic with a resolution gradient, not a uniform maximum zoom: cities carry real imagery down to z19, deserts and open ocean stop at z17, and some regions have none at all. Past the local limit the service serves a grey tile reading *"Map data not available"*.
+
+Pinpoint probes the imagery service for the locked coordinate and picks the sharpest depth that actually has data there, so zooming in gives **blurry imagery rather than a blank error tile**. Satellite mode also keeps the vector basemap's place labels on top of the imagery, so the map still tells you where you are when the photos run out. `Settings → Imagery Detail` can force the behaviour: *Auto*, *Balanced* (never blank, softer), or *Sharp*.
+
+### 🎮 6. Cyberpunk Game-Mode & Seed Cracker (S00N)
 Switches the neural stack into a procedural vector calculator. Pinpoint analyzes game screenshots (Minecraft, GTA V, etc.), extracts natural terrain details, and cracks:
 *   The exact natural biome (Plains, Forest, etc.)
 *   Procedural XYZ Coordinates
 *   Highly unique 10-digit World Seeds
 *   The dimension and game version
 
-Game mode requires a cloud model — the local CLIP bunker cannot crack a seed, and the API says so plainly instead of returning a fabricated one.
+Game mode requires a cloud model — the local bunker cannot crack a seed, and the API says so plainly instead of returning a fabricated one.
 
 ---
+
+### 🔒 7. The Local Model
+The offline tier runs **GeoCLIP** (`VicenteVivanco/geoclip-geolocation`, the official NeurIPS 2023 release, MIT), which aligns images with GPS coordinates and returns coordinates directly -- no geocoder involved. On a landmark benchmark it landed within 1 km of the truth where plain CLIP zero-shot was 11,787 km off.
+
+The upstream `predict()` re-encodes all 100,000 gallery coordinates on every call (~2 minutes), so the gallery embeddings are computed once and cached on disk, after which a prediction takes about 1.3 seconds. The weights live in `backend/models/`.
+
+GeoCLIP is consulted in every scan as an **independent cross-check**, not as a vote: it is right about 20% of the time on its own, so letting it corroborate would dress a wrong answer up as confirmed. The result card says plainly whether the local model agrees, or how far off it is. When no cloud model can be reached, it becomes the answer instead.
+
+Install it with `pip install -r requirements.txt -r requirements-local.txt`.
 
 ## 🔒 Privacy & Hardening
 
