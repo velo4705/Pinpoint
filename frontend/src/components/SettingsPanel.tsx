@@ -252,11 +252,20 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       <div className="flex items-baseline justify-between">
                         <span className="text-[9px] font-black uppercase tracking-widest text-[var(--text)]">
                           {provider.label}
+                          {!provider.available && (
+                            <span className="ml-2 text-[8px] font-normal normal-case text-red-400">
+                              not installed here
+                            </span>
+                          )}
                         </span>
                         <span className="text-[8px] text-[var(--text-muted)]">{provider.hint}</span>
                       </div>
 
-                      <div className="flex flex-col gap-1 max-h-40 overflow-y-auto no-scrollbar pr-1">
+                      <div
+                        className={`flex flex-col gap-1 max-h-40 overflow-y-auto no-scrollbar pr-1 ${
+                          provider.available ? '' : 'opacity-40 pointer-events-none'
+                        }`}
+                      >
                         {provider.models.map((entry) => {
                           const checked = selected.includes(entry.id);
                           return (

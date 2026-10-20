@@ -46,9 +46,6 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 load_dotenv(os.path.join(ROOT_DIR, ".env"))
 
-#: Where the local CLIP bunker keeps its weights (matches CONTEXT.md).
-MODEL_CACHE_DIR = os.path.join(ROOT_DIR, "backend", "models")
-
 #: Per-request wall-clock budget for the whole cascade.
 SCAN_DEADLINE_SECONDS = float(os.getenv("SCAN_DEADLINE_SECONDS", "90"))
 
@@ -267,7 +264,13 @@ GAME_TIERS: tuple[Tier, ...] = tuple(
 )
 
 def catalogue_for_api() -> dict:
-    """The catalogue, shaped for the frontend."""
+    """The catalogue, shaped for the frontend.
+
+    ``available`` reflects what this deployment can actually do. The local
+    engine needs the optional extras and is absent on hosts that cannot
+    spare the memory, such as a serverless function.
+    """
+    local_available = local_model_available()
     return {
         "providers": [
             {
@@ -275,6 +278,7 @@ def catalogue_for_api() -> dict:
                 "label": provider.label,
                 "hint": provider.hint,
                 "keyEnv": provider.key_env,
+                "available": local_available if provider.slug == "local" else True,
                 "models": [
                     {
                         "id": entry.id,

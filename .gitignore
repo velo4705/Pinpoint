@@ -26,6 +26,8 @@ backend/chroma_db/
 backend/models/
 
 # Node.js
+node_modules/
+.next/
 frontend/node_modules/
 frontend/.next/
 frontend/out/

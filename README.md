@@ -144,44 +144,125 @@ Install it with `pip install -r requirements.txt -r requirements-local.txt`.
 
 ---
 
-## 🚀 Cloud Deployment Guide
+## 🚀 Deployment
 
-Pinpoint is fully optimized to run on free-tier cloud architectures.
+**GitHub + Vercel is enough.** Two Vercel projects, both on the free Hobby
+plan, both deployed from this one repository.
 
-### Phase 1: Database (Upstash)
-1. Register a free account at [Upstash.com](https://upstash.com).
-2. Create a serverless Redis database named `pinpoint-cache`.
-3. Copy the secure connection URL (`rediss://default:...`).
+| Project | Root directory | What it is |
+|---|---|---|
+| `pinpoint-web` | `frontend/` | The Next.js app. Fully prerendered, so it is static. |
+| `pinpoint-api` | `backend/` | The FastAPI API, on Vercel's Python runtime. |
 
-### Phase 2: Backend (Render)
-1. Connect to [Render.com](https://render.com) and deploy a new **Web Service** linked to the Git repository.
-2. Set the `backend` directory as the Root Directory.
-3. Configure the environment:
-   * **Build Command:** `pip install -r requirements.txt`
-   * **Start Command:** `uvicorn main:app --host 0.0.0.0 --port 10000`
-4. Add the following Environment Variables under settings:
-   * `REDIS_URL` = (The copied Upstash connection string)
-   * `GROQ_API_KEY`, `GOOGLE_API_KEY`, `OPENAI_API_KEY` (any subset — every key is optional)
+Vercel detects the FastAPI `app` in `backend/main.py` automatically — there is
+no start command, no `PORT`, and no Dockerfile involved.
 
-> The local CLIP bunker is **not** installed by default on Render, because `torch` is a heavy download that does not fit a free-tier build comfortably. Add `pip install -r requirements.txt -r requirements-local.txt` to the build command if you want tier 14.
+### The one thing that had to change
 
-### Phase 3: Frontend (Vercel)
-1. Log into [Vercel.com](https://vercel.com) and import the repository.
-2. Set the Root Directory to `frontend`.
-3. Configure the following Environment Variable:
-   * `NEXT_PUBLIC_API_URL` = (The live URL of the deployed Render Web Service)
-4. Click **Deploy**!
+Vercel Functions cap request bodies at **4.5 MB**
+(`FUNCTION_PAYLOAD_TOO_LARGE`), and a phone photo is routinely larger than
+that. So **the browser now downscales the image before it uploads it** — a
+1600 px long edge, JPEG quality 0.9.
+
+That is not a workaround, it is an improvement on its own:
+
+- The vision models resize to 224×224 internally, so a twelve megapixel photo
+  was pure waste on the wire.
+- Signage is the one thing that needs resolution, so the long edge is kept
+  generous.
+- Measured on an 18.3 MB image: **18.3 MB → 1.18 MB**, a 15.5× reduction.
+  Every scan gets faster and cheaper, on any host.
+
+### What you lose: the local tier
+
+The offline GeoCLIP tier needs ~2.5 GB of RAM and 6 GB of disk for the
+weights. A Vercel Function has 2 GB of memory and a 500 MB Python bundle
+limit, so the local tier **cannot run there** — the model simply will not
+load. The API detects this and says so:
+
+```json
+GET /health  ->  {"local_bunker": false, "tiers": 16, ...}
+```
+
+The model picker marks the local engine as *"not installed here"* and greys
+it out, so nobody picks a model that cannot answer. Cloud tiers and BYOK are
+unaffected.
+
+If you want the local tier in production, you need a machine with real
+disk — see **Running the local tier** below.
+
+### Deploying the API
+
+```bash
+cd backend
+vercel link            # create the project, root directory = backend
+vercel pull --environment=development
+vercel dev             # test locally first
+vercel deploy --prod
+```
+
+Environment variables (all optional — operators can bring their own keys):
+
+* `REDIS_URL` — an Upstash connection string for the image and geocode cache
+* `GROQ_API_KEY`, `GOOGLE_API_KEY`, `OPENAI_API_KEY` — server-side keys
+* `ALLOWED_ORIGINS` — your frontend's domain
+
+### Deploying the frontend
+
+1. Import the repository at [Vercel.com](https://vercel.com).
+2. Set the **Root Directory** to `frontend`.
+3. Set `NEXT_PUBLIC_API_URL` to the API's URL.
+4. Deploy.
+
+### Running the local tier
+
+The local tier needs a machine, so it wants a real host rather than a
+function. The backend ships as a portable image:
+
+```bash
+docker build -t pinpoint-api ./backend
+docker run -p 8000:8000 --env-file .env -v pinpoint-models:/app/models pinpoint-api
+```
+
+| Host | Specs | Cost | Local tier |
+|---|---|---|---|
+| **Fly.io** | 256 MB – 2 GB machines, volumes $0.15/GB/mo | $2.19 – $17.55/mo | ✅ |
+| **Any small VPS** (Hetzner, Contabo) | 2–4 GB RAM, 40 GB disk | ~€4/mo | ✅ |
+| **Oracle Cloud Always Free** | 4 VMs, 24 GB RAM total, 200 GB disk | Free | ⚠️ aarch64 wheels, hard sign-up |
+| **Your own machine + Cloudflare Tunnel** | Whatever it has | Free | ✅ no cold start, nothing leaves the house |
+
+Fly.io has **no free tier** — only a 2-hour trial. If free matters more than
+convenience, the last row is the one to look at.
+
+### Why not Render
+
+Render was the default "somewhere to run Python" answer, and its free tier
+cannot run this project at all: 512 MB RAM and 0.1 CPU (GeoCLIP needs ~2.5
+GB), an ephemeral filesystem (so the 1.7 GB of weights would be re-downloaded
+from HuggingFace on every cold start), and persistent disks are paid-only —
+the first paid tier is $7/mo and still too small. Render's own docs say
+*"Do not use them for production applications."*
+
+### Phase 1: Cache (Upstash)
+
+1. Register at [Upstash.com](https://upstash.com).
+2. Create a serverless Redis database.
+3. Copy the connection URL (`rediss://default:...`) into `REDIS_URL`.
+
+Optional. Without it the API runs statelessly and just re-does the geocoding.
 
 ---
 
 ## 💻 Local Development Quickstart
 
-### 1. Run the Local Redis Container (optional — the API runs fine without it)
+### Option A: Docker Compose (everything at once)
 ```bash
-docker run --name pinpoint-redis -d -p 6379:6379 redis:alpine
+cp .env.example .env      # add whichever model keys you have
+docker compose up --build
 ```
+The API comes up on `http://localhost:8000` and Redis alongside it.
 
-### 2. Run the Backend
+### Option B: Just the API
 ```bash
 cd backend
 python3 -m venv venv
@@ -190,7 +271,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-To enable the offline CLIP bunker (tier 14), also install the optional extras:
+To enable the offline GeoCLIP tier, also install the optional extras:
 ```bash
 pip install -r requirements-local.txt
 ```
@@ -198,7 +279,7 @@ The weights download once into `backend/models/` and are reused on every run.
 
 Copy `.env.example` to `.env` in the repository root and add whichever keys you have. With no keys at all the API still starts — it simply reports that no tier is reachable.
 
-### 3. Run the Frontend
+### Run the Frontend
 ```bash
 cd frontend
 npm install
@@ -207,7 +288,7 @@ npm run dev
 
 Open `http://localhost:3000` to access the neural scanner dashboard.
 
-### 4. Audit your tier ladder
+### Audit your tier ladder
 ```bash
 cd backend
 python -m app.audit_brains

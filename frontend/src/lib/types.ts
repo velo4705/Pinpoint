@@ -56,6 +56,8 @@ export interface CatalogProvider {
   label: string;
   hint: string;
   keyEnv: string | null;
+  /** False when this deployment cannot run the provider at all. */
+  available: boolean;
   models: CatalogModel[];
 }
 
