@@ -1,0 +1,47 @@
+# Pinpoint, running locally.
+#
+#   cp .env.example .env   # add whichever model keys you have
+#   docker compose up --build
+#
+# The API is on http://localhost:8000 and the frontend dev server on
+# http://localhost:3000. Point the frontend at the API with
+# NEXT_PUBLIC_API_URL=http://localhost:8000.
+
+services:
+  api:
+    build:
+      context: ./backend
+      args:
+        # Set to 0 for a small image without the offline GeoCLIP tier.
+        INSTALL_LOCAL_MODEL: "1"
+    image: pinpoint-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      # Keeps the model weights across rebuilds, so the local tier does not
+      # re-download 1.7 GB every time the container is recreated.
+      - pinpoint-models:/app/models
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - pinpoint-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pinpoint-models:
+  pinpoint-redis:

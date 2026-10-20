@@ -1,0 +1,20 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "main.py": {
+      "maxDuration": 300
+    }
+  },
+  "buildCommand": "pip install --no-cache-dir -r requirements.txt",
+  "excludeFiles": [
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "venv/**",
+    "models/**",
+    "chroma_db/**",
+    "tests/**",
+    "Dockerfile",
+    "requirements-local.txt",
+    ".dockerignore"
+  ]
+}
