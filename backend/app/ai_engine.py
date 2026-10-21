@@ -105,7 +105,7 @@ PROVIDERS: dict[str, Provider] = {
     ),
     "local": Provider(
         slug="local",
-        label="Local CLIP",
+        label="Offline",
         env_key=None,
         endpoint="",
         style=LOCAL,
@@ -220,11 +220,11 @@ MODEL_CATALOGUE: tuple[ProviderCatalogue, ...] = (
     ),
     ProviderCatalogue(
         slug="local",
-        label="Local",
+        label="Offline",
         key_env=None,
-        hint="offline, no key, no cost",
+        hint="no key, no network, no cost",
         models=(
-            ModelEntry("auto", "Auto", "GeoCLIP if installed, else CLIP", tier=17, game_capable=False),
+            ModelEntry("auto", "Auto", "GeoCLIP if prepared, else CLIP", tier=17, game_capable=False),
             ModelEntry("geoclip", "GeoCLIP", "accurate; returns coordinates", tier=17, game_capable=False),
             ModelEntry("clip", "CLIP zero-shot", "lightweight; names only", tier=17, game_capable=False),
         ),
@@ -270,7 +270,8 @@ def catalogue_for_api() -> dict:
     engine needs the optional extras and is absent on hosts that cannot
     spare the memory, such as a serverless function.
     """
-    local_available = local_model_available()
+    local_status = local_model.status()
+    local_available = local_status["installed"]
     return {
         "providers": [
             {
@@ -279,6 +280,8 @@ def catalogue_for_api() -> dict:
                 "hint": provider.hint,
                 "keyEnv": provider.key_env,
                 "available": local_available if provider.slug == "local" else True,
+                "offlineReady": local_status["prepared"] if provider.slug == "local" else True,
+                "note": local_status["detail"] if provider.slug == "local" else "",
                 "models": [
                     {
                         "id": entry.id,

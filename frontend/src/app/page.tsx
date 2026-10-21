@@ -9,13 +9,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Sun, Moon, Settings, Info, History, Map as MapIcon, Crosshair, X } from 'lucide-react';
 import { fetchHistory, fetchModelCatalog, selectionToIds } from '@/lib/api';
 import { useByok } from '@/lib/useByok';
+import { useSettings } from '@/lib/useSettings';
 import type {
   AccentColor,
-  ImageryDetail,
-  MapStyle,
   ModelCatalog,
-  ModelChoice,
-  ModelSelection,
   ProviderSlug,
   ScanMode,
   ScanResult,
@@ -33,24 +30,28 @@ const ACCENT_VALUES: Record<AccentColor, { accent: string; hover: string }> = {
 export default function Home() {
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [isScanning, setIsScanning] = useState(false);
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [history, setHistory] = useState<VaultEntry[]>([]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [currentMode, setCurrentMode] = useState<ScanMode>('real-world');
   const [currentGame, setCurrentGame] = useState('Minecraft');
 
-  const [accentColor, setAccentColor] = useState<AccentColor>('red');
-  const [mapStyle, setMapStyle] = useState<MapStyle>('dark');
-  const [imageryDetail, setImageryDetail] = useState<ImageryDetail>('auto');
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
-  const [modelSelection, setModelSelection] = useState<ModelSelection>({});
-  const [selectedModel, setSelectedModel] = useState<ModelChoice>('auto');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isInfoOpen, setIsInfoOpen] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
 
   const [view, setView] = useState<'map' | 'scanner'>('scanner');
 
   const byok = useByok();
+  const settings = useSettings();
+  const {
+    theme,
+    accentColor,
+    mapStyle,
+    imageryDetail,
+    selectedModel,
+    modelSelection,
+  } = settings.values;
   const selectedModelIds = selectionToIds(modelSelection);
 
   useEffect(() => {
@@ -86,7 +87,8 @@ export default function Home() {
     }
   };
 
-  const toggleTheme = () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  const toggleTheme = () =>
+    settings.set({ theme: settings.values.theme === 'dark' ? 'light' : 'dark' });
 
   const handleScanResult = (result: ScanResult | null) => {
     setScanResult(result);
@@ -461,21 +463,34 @@ export default function Home() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         accentColor={accentColor}
-        onAccentChange={setAccentColor}
+        onAccentChange={(accentColor) => settings.set({ accentColor })}
         mapStyle={mapStyle}
-        onMapStyleChange={setMapStyle}
+        onMapStyleChange={(mapStyle) => settings.set({ mapStyle })}
         imageryDetail={imageryDetail}
-        onImageryDetailChange={setImageryDetail}
+        onImageryDetailChange={(imageryDetail) => settings.set({ imageryDetail })}
         selectedModel={selectedModel}
-        onModelChange={setSelectedModel}
+        onModelChange={(selectedModel) => settings.set({ selectedModel })}
         byok={byok.keys}
         onByokChange={(slug: ProviderSlug, value: string) => byok.setKey(slug, value)}
         catalog={catalog}
         modelSelection={modelSelection}
-        onModelSelectionChange={setModelSelection}
+        onModelSelectionChange={(modelSelection) => settings.set({ modelSelection })}
         rememberKeys={byok.remember}
         onRememberChange={byok.setRemember}
         onClearKeys={byok.clear}
+        dirty={settings.dirty || byok.dirty}
+        savedAt={settings.savedAt}
+        saveFailed={saveFailed}
+        onSave={() => {
+          const settingsOk = settings.save();
+          const keysOk = byok.save();
+          setSaveFailed(!(settingsOk && keysOk));
+        }}
+        onDiscard={() => {
+          settings.discard();
+          byok.discard();
+          setSaveFailed(false);
+        }}
       />
 
       {/* Info overlay */}

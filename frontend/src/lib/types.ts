@@ -58,6 +58,13 @@ export interface CatalogProvider {
   keyEnv: string | null;
   /** False when this deployment cannot run the provider at all. */
   available: boolean;
+  /**
+   * False when the provider is installed but its weights are not on disk yet.
+   * Only the offline tier has this distinction.
+   */
+  offlineReady?: boolean;
+  /** Why the provider is unavailable, or how to make it available. */
+  note?: string;
   models: CatalogModel[];
 }
 

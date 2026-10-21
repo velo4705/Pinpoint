@@ -24,12 +24,27 @@ Two offline models back the local tier:
     working when GeoCLIP is not installed.
 
 Both are optional: the API starts fine without them.
+
+Offline operation
+-----------------
+The weights are fetched from Hugging Face **once**, into
+``backend/models/``. After that the tier needs no key and no network: the
+loader always tries the local cache first and only reaches for the network
+if something is missing.
+
+Prepare a machine with::
+
+    python -m app.local_model
+
+which downloads both snapshots, precomputes the gallery cache, and then
+verifies the tier answers with the network switched off.
 """
 
 from __future__ import annotations
 
 import io
 import os
+import sys
 import threading
 import time
 from typing import Any
@@ -41,8 +56,26 @@ MODEL_CACHE_DIR = os.path.join(
 GEOCLIP_REPO = "VicenteVivanco/geoclip-geolocation"
 CLIP_REPO = "openai/clip-vit-base-patch32"
 
+#: The backbone GeoCLIP is built on, pinned by the release's config.
+GEOCLIP_BACKBONE = "openai/clip-vit-large-patch14"
+GEOCLIP_BACKBONE_REVISION = "32bd64288804d66eefd0ccbe215aa642df71cc41"
+
 #: A location is "real imagery" rather than a no-data tile.
 _GALLERY_CACHE_NAME = "geoclip_gallery_100k.f16.npy"
+
+#: Where the Hugging Face snapshots live. This is passed explicitly to every
+#: download so the cache location never depends on import order.
+HF_CACHE_DIR = os.path.join(MODEL_CACHE_DIR, "hub")
+
+#: What has to be in the cache for the tier to answer with no network.
+_REQUIRED_SNAPSHOTS = (
+    (GEOCLIP_REPO, None, ["config.json", "model.safetensors", "*.csv"]),
+    (
+        GEOCLIP_BACKBONE,
+        GEOCLIP_BACKBONE_REVISION,
+        ["*.json", "merges.txt", "model.safetensors"],
+    ),
+)
 
 #: A deliberately wide, visually distinctive label set. CLIP is a *weak*
 #: geolocator, so the label set is the main lever on its accuracy.
@@ -189,6 +222,54 @@ class LocalModel:
     def available(self) -> bool:
         return self.geoclip_available() or self.clip_available()
 
+    def weights_cached(self) -> bool:
+        """True when every weight the tier needs is already on disk.
+
+        This is what makes the offline promise real: with the snapshots
+        present, the loader never reaches for the network.
+        """
+        if not self.available():
+            return False
+        try:
+            from huggingface_hub import snapshot_download
+
+            for repo, revision, patterns in _REQUIRED_SNAPSHOTS:
+                snapshot_download(
+                    repo_id=repo,
+                    revision=revision,
+                    allow_patterns=patterns,
+                    cache_dir=HF_CACHE_DIR,
+                    local_files_only=True,
+                )
+            return True
+        except Exception:
+            return False
+
+    def status(self) -> dict:
+        """Report what this deployment can do with the offline tier.
+
+        ``installed`` means the engine's dependencies are present.
+        ``prepared`` means the weights are cached, so it answers with no
+        network at all.
+        """
+        installed = self.available()
+        if not installed:
+            return {
+                "installed": False,
+                "prepared": False,
+                "detail": "torch and transformers are not installed here",
+            }
+        prepared = self.weights_cached()
+        return {
+            "installed": True,
+            "prepared": prepared,
+            "detail": (
+                "weights cached; answers with no network"
+                if prepared
+                else "weights not downloaded yet -- run: python -m app.local_model"
+            ),
+        }
+
     # -- GeoCLIP -----------------------------------------------------------
 
     def _prepare_cache_env(self) -> None:
@@ -208,7 +289,18 @@ class LocalModel:
                 self._prepare_cache_env()
                 from geoclip import GeoCLIP
 
-                self._geoclip = GeoCLIP.from_pretrained(GEOCLIP_REPO).eval()
+                # Always try the local cache first: once the weights have
+                # been fetched, the tier must not need the network again.
+                try:
+                    self._geoclip = GeoCLIP.from_pretrained(
+                        GEOCLIP_REPO,
+                        cache_dir=HF_CACHE_DIR,
+                        local_files_only=True,
+                    ).eval()
+                except Exception:
+                    self._geoclip = GeoCLIP.from_pretrained(
+                        GEOCLIP_REPO, cache_dir=HF_CACHE_DIR
+                    ).eval()
                 self._gallery = self._gallery_embeddings()
             except Exception as exc:
                 print(f"[local] GeoCLIP unavailable: {type(exc).__name__}: {exc}")
@@ -276,12 +368,120 @@ class LocalModel:
                 self._prepare_cache_env()
                 from transformers import CLIPModel, CLIPProcessor
 
-                self._clip_model = CLIPModel.from_pretrained(CLIP_REPO).eval()
-                self._clip_processor = CLIPProcessor.from_pretrained(CLIP_REPO)
+                # Cache first, network second, exactly as for GeoCLIP.
+                try:
+                    self._clip_model = CLIPModel.from_pretrained(
+                        CLIP_REPO, cache_dir=HF_CACHE_DIR, local_files_only=True
+                    ).eval()
+                    self._clip_processor = CLIPProcessor.from_pretrained(
+                        CLIP_REPO, cache_dir=HF_CACHE_DIR, local_files_only=True
+                    )
+                except Exception:
+                    self._clip_model = CLIPModel.from_pretrained(
+                        CLIP_REPO, cache_dir=HF_CACHE_DIR
+                    ).eval()
+                    self._clip_processor = CLIPProcessor.from_pretrained(
+                        CLIP_REPO, cache_dir=HF_CACHE_DIR
+                    )
             except Exception as exc:
                 print(f"[local] CLIP unavailable: {type(exc).__name__}: {exc}")
                 self._clip_model = None
             return self._clip_model is not None
+
+    # -- preparation -------------------------------------------------------
+
+    @staticmethod
+    def _probe_image() -> bytes:
+        """A small valid image, used to prove the tier can answer offline."""
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        Image.new("RGB", (256, 256), (86, 132, 168)).save(buffer, format="JPEG")
+        return buffer.getvalue()
+
+    def prefetch(self, verbose: bool = True) -> dict:
+        """Download everything the offline tier needs, and cache the gallery.
+
+        Called by ``python -m app.local_model``. Safe to re-run: anything
+        already downloaded is not fetched again.
+        """
+        self._prepare_cache_env()
+        from huggingface_hub import snapshot_download
+
+        report: dict[str, Any] = {"cache": MODEL_CACHE_DIR}
+        started = time.monotonic()
+
+        if verbose:
+            print(f"[local] cache directory: {MODEL_CACHE_DIR}")
+
+        for (repo, revision, patterns), label in zip(
+            _REQUIRED_SNAPSHOTS, ("geoclip", "backbone")
+        ):
+            if verbose:
+                print(f"[local] fetching {label} ({repo})")
+            snapshot_download(
+                repo_id=repo,
+                revision=revision,
+                allow_patterns=patterns,
+                cache_dir=HF_CACHE_DIR,
+            )
+
+        # The gallery embeddings are derived data, but recomputing them needs
+        # the weights, so they are prepared here too.
+        self._geoclip_ready = False
+        self._geoclip = None
+        if self._load_geoclip():
+            report["geoclip"] = "ready"
+        else:
+            report["geoclip"] = "failed"
+
+        report["seconds"] = round(time.monotonic() - started, 1)
+        if verbose:
+            cache_file = os.path.join(MODEL_CACHE_DIR, _GALLERY_CACHE_NAME)
+            if os.path.exists(cache_file):
+                report["gallery_mb"] = round(os.path.getsize(cache_file) / 1e6, 1)
+            print(f"[local] ready in {report['seconds']}s")
+        return report
+
+    def verify_offline(self) -> dict:
+        """Prove the tier answers with the network unavailable.
+
+        The Hub client is forced into local-only mode and the outbound
+        socket is blocked, then a prediction is attempted.
+        """
+        import socket
+
+        original_connect = socket.socket.connect
+        original_create = socket.create_connection
+
+        def blocked(*args, **kwargs):
+            raise OSError("network disabled for the offline check")
+
+        socket.socket.connect = blocked  # type: ignore[method-assign]
+        socket.create_connection = blocked  # type: ignore[assignment]
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        try:
+            self._geoclip_ready = False
+            self._geoclip = None
+            self._clip_model = None
+            self._clip_processor = None
+            started = time.monotonic()
+            label, coordinates, score, engine = self.predict(self._probe_image())
+            return {
+                "offline": True,
+                "engine": engine,
+                "label": label,
+                "coordinates": coordinates,
+                "score": round(score, 4),
+                "seconds": round(time.monotonic() - started, 1),
+                "ok": label is not None,
+            }
+        finally:
+            socket.socket.connect = original_connect  # type: ignore[method-assign]
+            socket.create_connection = original_create  # type: ignore[assignment]
+            os.environ.pop("HF_HUB_OFFLINE", None)
+            os.environ.pop("TRANSFORMERS_OFFLINE", None)
 
     def predict_clip(self, image_bytes: bytes):
         """Return ``(label, score)`` for the image, or ``None``."""
@@ -364,3 +564,40 @@ def _as_features(output):
     if isinstance(output, (tuple, list)) and output and isinstance(output[0], torch.Tensor):
         return output[0]
     raise TypeError(f"unrecognised CLIP feature output: {type(output).__name__}")
+
+
+def _main() -> int:
+    """``python -m app.local_model`` -- prepare or verify the offline tier."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Prepare the offline geolocation model, or verify it works without a network."
+    )
+    parser.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="skip the download and just check the tier answers offline",
+    )
+    args = parser.parse_args()
+
+    model = LocalModel()
+
+    if not args.verify_only:
+        report = model.prefetch()
+        if report.get("geoclip") != "ready":
+            print("[local] GeoCLIP could not be prepared", file=sys.stderr)
+            return 1
+
+    result = model.verify_offline()
+    print()
+    print("Offline check")
+    print(f"  engine     : {result['engine']}")
+    print(f"  answered   : {result['ok']}")
+    print(f"  position   : {result['coordinates']}")
+    print(f"  score      : {result['score']}")
+    print(f"  load time  : {result['seconds']}s")
+    return 0 if result["ok"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

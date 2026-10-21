@@ -2,7 +2,19 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Settings, CheckCircle2, CircleDashed, CircleX, Loader2, KeyRound, Trash2 } from 'lucide-react';
+import {
+  X,
+  Settings,
+  CheckCircle2,
+  CircleDashed,
+  CircleX,
+  Loader2,
+  KeyRound,
+  Trash2,
+  Save,
+  Undo2,
+  ShieldCheck,
+} from 'lucide-react';
 import { verifyKeys } from '@/lib/api';
 import { PROVIDER_META } from '@/lib/types';
 import type {
@@ -37,6 +49,14 @@ interface SettingsPanelProps {
   rememberKeys: boolean;
   onRememberChange: (enabled: boolean) => void;
   onClearKeys: () => void;
+  /** True when the panel holds changes that are not on disk yet. */
+  dirty: boolean;
+  onSave: () => void;
+  onDiscard: () => void;
+  /** When the settings were last written to disk, or null if never. */
+  savedAt: number | null;
+  /** True when the last save attempt was refused by the browser. */
+  saveFailed: boolean;
 }
 
 const ACCENTS: AccentColor[] = ['red', 'blue', 'green', 'purple', 'orange'];
@@ -63,7 +83,7 @@ const MODELS: { value: ModelChoice; label: string }[] = [
   { value: 'gemini-only', label: 'Gemini-Only' },
   { value: 'groq-only', label: 'Groq-Only' },
   { value: 'openai-only', label: 'OpenAI-Only' },
-  { value: 'local-only', label: 'Local AI Engine' },
+  { value: 'local-only', label: 'Offline AI Engine' },
 ];
 
 const STATUS_ICON = {
@@ -97,10 +117,16 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   rememberKeys,
   onRememberChange,
   onClearKeys,
+  dirty,
+  onSave,
+  onDiscard,
+  savedAt,
+  saveFailed,
 }) => {
   const [statuses, setStatuses] = useState<ProviderStatus[] | null>(null);
   const [testing, setTesting] = useState(false);
   const [testError, setTestError] = useState<string | null>(null);
+  const [justSaved, setJustSaved] = useState(false);
 
   const runTest = async () => {
     setTesting(true);
@@ -117,6 +143,12 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     } finally {
       setTesting(false);
     }
+  };
+
+  const handleSave = () => {
+    onSave();
+    setJustSaved(true);
+    window.setTimeout(() => setJustSaved(false), 2200);
   };
 
   const hasKey = Boolean(byok.groq || byok.gemini || byok.openai);
@@ -176,7 +208,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 request and are never written to the Pinpoint server, the cache, or the log.
               </p>
 
-              <div className="flex flex-col gap-2">
+              <form
+                className="flex flex-col gap-2"
+                onSubmit={(event) => event.preventDefault()}
+              >
                 {(Object.keys(PROVIDER_META) as ProviderSlug[]).map((slug) => (
                   <div key={slug} className="flex flex-col gap-1">
                     <span className="text-[8px] text-[var(--text-muted)] uppercase tracking-widest font-black">
@@ -193,7 +228,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     />
                   </div>
                 ))}
-              </div>
+              </form>
 
               <label className="flex items-start gap-3 cursor-pointer group">
                 <input
@@ -203,10 +238,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   className="mt-0.5 w-3.5 h-3.5 accent-[var(--accent)] cursor-pointer"
                 />
                 <span className="text-[9px] text-[var(--text-muted)] leading-relaxed group-hover:text-[var(--text)] transition-colors">
-                  Remember keys on this device
+                  Keep keys on this device
                   <span className="block opacity-70">
-                    Off by default: keys are kept in memory and cleared when the tab closes. Turning
-                    this on stores them in this browser&apos;s local storage.
+                    Off by default: keys are held in memory and cleared when the tab closes. Turning
+                    this on and pressing Save writes them to this browser&apos;s local storage.
                   </span>
                 </span>
               </label>
@@ -257,9 +292,21 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                               not installed here
                             </span>
                           )}
+                          {provider.available &&
+                            provider.offlineReady === false && (
+                              <span className="ml-2 text-[8px] font-normal normal-case text-amber-400">
+                                not prepared
+                              </span>
+                            )}
                         </span>
                         <span className="text-[8px] text-[var(--text-muted)]">{provider.hint}</span>
                       </div>
+
+                      {provider.note && (
+                        <p className="text-[8px] leading-tight text-[var(--text-muted)] opacity-75">
+                          {provider.note}
+                        </p>
+                      )}
 
                       <div
                         className={`flex flex-col gap-1 max-h-40 overflow-y-auto no-scrollbar pr-1 ${
@@ -316,6 +363,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 <button
                   onClick={onClearKeys}
                   disabled={!hasKey}
+                  title="Remove the keys from this browser's storage and from memory, now"
                   className="py-2.5 px-4 rounded-xl border border-[var(--border)] bg-[var(--bg)] text-[9px] font-black uppercase tracking-widest flex items-center gap-2 transition-all hover:border-red-500/50 hover:text-red-400 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
@@ -444,13 +492,75 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 ))}
               </select>
               <p className="text-[8px] text-[var(--text-muted)] leading-relaxed">
-                The local engine runs entirely on this machine and needs no key, but it cannot crack
-                world seeds and its accuracy is far below the cloud tiers.
+                The offline engine runs entirely on this machine and needs no key and no network
+                once its weights are prepared, but it cannot crack world seeds and its accuracy is
+                far below the cloud tiers.
               </p>
             </div>
 
-            <div className="text-[8px] text-[var(--text-muted)] font-mono uppercase text-center mt-2 tracking-widest">
+            <div className="text-[8px] text-[var(--text-muted)] font-mono uppercase text-center tracking-widest">
               Pinpoint OS // Core System Panel Active
+            </div>
+
+            {/* Save bar */}
+            <div className="sticky bottom-0 -mx-8 px-8 py-4 border-t border-[var(--border)] bg-[var(--panel)] flex items-center justify-between gap-3">
+              <div className="flex flex-col gap-1 min-w-0">
+                <span
+                  className={`text-[9px] font-black uppercase tracking-widest flex items-center gap-1.5 ${
+                    saveFailed
+                      ? 'text-red-400'
+                      : dirty
+                        ? 'text-amber-400'
+                        : justSaved
+                          ? 'text-emerald-400'
+                          : 'text-[var(--text-muted)]'
+                  }`}
+                >
+                  {saveFailed ? (
+                    <>
+                      <CircleX className="w-3.5 h-3.5" />
+                      Could not save
+                    </>
+                  ) : dirty ? (
+                    <>
+                      <CircleDashed className="w-3.5 h-3.5" />
+                      Unsaved changes
+                    </>
+                  ) : justSaved ? (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Saved
+                    </>
+                  ) : (
+                    <>
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      {savedAt ? 'All changes saved' : 'Nothing saved yet'}
+                    </>
+                  )}
+                </span>
+                <span className="text-[8px] text-[var(--text-muted)] opacity-70 leading-tight">
+                  Saved to this browser only. Nothing is sent to the server.
+                </span>
+              </div>
+
+              <div className="flex gap-2 shrink-0">
+                <button
+                  onClick={onDiscard}
+                  disabled={!dirty}
+                  className="py-2.5 px-4 rounded-xl border border-[var(--border)] bg-[var(--bg)] text-[9px] font-black uppercase tracking-widest flex items-center gap-2 transition-all hover:border-[var(--text-muted)] disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Undo2 className="w-3.5 h-3.5" />
+                  Discard
+                </button>
+                <button
+                  onClick={handleSave}
+                  disabled={!dirty}
+                  className="py-2.5 px-5 rounded-xl border border-[var(--accent)] bg-[var(--accent)] text-[9px] font-black uppercase tracking-widest flex items-center gap-2 transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:opacity-40"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  Save
+                </button>
+              </div>
             </div>
           </motion.div>
         </>

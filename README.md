@@ -131,7 +131,43 @@ The upstream `predict()` re-encodes all 100,000 gallery coordinates on every cal
 
 GeoCLIP is consulted in every scan as an **independent cross-check**, not as a vote: it is right about 20% of the time on its own, so letting it corroborate would dress a wrong answer up as confirmed. The result card says plainly whether the local model agrees, or how far off it is. When no cloud model can be reached, it becomes the answer instead.
 
-Install it with `pip install -r requirements.txt -r requirements-local.txt`.
+### 📴 The offline tier
+
+GeoCLIP is installed **once** from Hugging Face and then works with **no key
+and no network at all**:
+
+```bash
+cd backend
+pip install -r requirements.txt -r requirements-local.txt
+python -m app.local_model
+```
+
+That command fetches both snapshots (GeoCLIP plus the `clip-vit-large-patch14`
+backbone it is built on) into `backend/models/`, precomputes the gallery
+embeddings, and then **verifies the tier answers with the network switched
+off** — it blocks outbound sockets, forces the Hub client into local-only
+mode, and runs a real prediction. You should see:
+
+```
+Offline check
+  engine     : GeoCLIP
+  answered   : True
+  position   : (54.34101486206055, -109.93521881103516)
+  load time  : 2.8s
+```
+
+The loader always tries the local cache **first** and only reaches for the
+network if something is missing, so once prepared the tier never waits on a
+download. `GET /models` reports the state honestly:
+
+| Field | Meaning |
+|---|---|
+| `available` | the engine's dependencies are installed |
+| `offlineReady` | the weights are on disk, so it answers with no network |
+| `note` | why it is unavailable, or how to make it available |
+
+**Production runs cloud tiers only.** The offline tier is a development and
+air-gapped convenience, not a production path — see *Deployment* below.
 
 ## 🔒 Privacy & Hardening
 
@@ -141,6 +177,29 @@ Install it with `pip install -r requirements.txt -r requirements-local.txt`.
 *   **Scans run off the event loop** on a worker thread, so one slow provider cannot stall the whole API.
 *   **Per-IP rate limiting** protects the deployment's own keys (default 30 requests/minute).
 *   **Confidence is honest.** The local bunker reports its own CLIP score (typically low); cloud tiers report a score that reflects how specific the answer was, rather than a flat 99%.
+
+### 💾 Saving your settings and keys
+
+The System Control Panel has a **Save** button, and it is the only thing that
+writes anything to disk.
+
+*   **Nothing is written until you press Save.** A key you have typed lives in
+    memory only, so a stray keystroke cannot end up in storage.
+*   **Keys are off by default.** Tick *Keep keys on this device* and press Save
+    to write them to this browser's `localStorage`; leave it unticked and they
+    are discarded when the tab closes. Un-ticking it and pressing Save takes
+    them back off the disk.
+*   **Settings** -- accent, map style, imagery detail, model selection -- are
+    saved the same way. Changes apply live so you can see them, and the panel
+    tells you whether they are on disk yet.
+*   **Discard** throws the unsaved changes away and goes back to what is
+    stored.
+*   **Clear** removes the keys from memory *and* from storage immediately.
+*   If the browser refuses to write -- private browsing, blocked storage --
+    the panel says **Could not save** rather than pretending it worked. Your
+    settings still apply for the session.
+*   Saving is entirely local. The Save button never sends anything to the
+    server.
 
 ---
 
@@ -214,10 +273,16 @@ Environment variables (all optional — operators can bring their own keys):
 3. Set `NEXT_PUBLIC_API_URL` to the API's URL.
 4. Deploy.
 
-### Running the local tier
+### The offline tier is not a production path
 
-The local tier needs a machine, so it wants a real host rather than a
-function. The backend ships as a portable image:
+Production is **cloud tiers and BYOK only**. The offline tier needs ~2.5 GB of
+RAM and 6 GB of disk for the weights, which a Vercel Function cannot spare,
+and it is slower and less accurate than the cloud tiers anyway. It exists for
+development, for air-gapped machines, and for the case where every API key is
+spent or unreachable.
+
+If you want it on a machine of your own, the backend ships as a portable
+image:
 
 ```bash
 docker build -t pinpoint-api ./backend
@@ -230,6 +295,9 @@ docker run -p 8000:8000 --env-file .env -v pinpoint-models:/app/models pinpoint-
 | **Any small VPS** (Hetzner, Contabo) | 2–4 GB RAM, 40 GB disk | ~€4/mo | ✅ |
 | **Oracle Cloud Always Free** | 4 VMs, 24 GB RAM total, 200 GB disk | Free | ⚠️ aarch64 wheels, hard sign-up |
 | **Your own machine + Cloudflare Tunnel** | Whatever it has | Free | ✅ no cold start, nothing leaves the house |
+
+Whichever host you pick, prepare the weights once with
+`python -m app.local_model` and the tier works with no network from then on.
 
 Fly.io has **no free tier** — only a 2-hour trial. If free matters more than
 convenience, the last row is the one to look at.
