@@ -155,19 +155,28 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
   // "Auto" means the engine picks its own accuracy-ordered ladder.
   const selectionIsEmpty = Object.values(modelSelection).every(
-    (models) => !models || models.length === 0,
+    (family) => !family,
   );
 
-  const toggleModel = (slug: CatalogSlug, modelId: string) => {
-    const current = modelSelection[slug] ?? [];
-    const next = current.includes(modelId)
-      ? current.filter((id) => id !== modelId)
-      : [...current, modelId];
-    onModelSelectionChange({ ...modelSelection, [slug]: next });
+  const selectFamily = (slug: CatalogSlug, familyId: string) => {
+    const next = { ...modelSelection };
+    if (!familyId) {
+      delete next[slug];
+    } else {
+      next[slug] = familyId;
+    }
+    onModelSelectionChange(next);
   };
 
-  const selectOnly = (slug: CatalogSlug, modelId: string) => {
-    onModelSelectionChange({ ...modelSelection, [slug]: [modelId] });
+  /**
+   * A provider's model picker unlocks once its own key has passed the link
+   * test. Choosing a model for a provider whose key does not work would
+   * only produce silence.
+   */
+  const providerUnlocked = (slug: CatalogSlug): boolean => {
+    if (slug === 'local') return true;
+    const status = statuses?.find((entry) => entry.provider === slug);
+    return status?.status === 'ok';
   };
 
   return (
@@ -281,10 +290,12 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
                 {catalog?.providers.map((provider) => {
                   const isLocal = provider.slug === 'local';
-                  const selected = modelSelection[provider.slug] ?? [];
+                  const selected = modelSelection[provider.slug] ?? '';
+                  const unlocked = providerUnlocked(provider.slug);
+                  const status = statuses?.find((entry) => entry.provider === provider.slug);
                   return (
                     <div key={provider.slug} className="flex flex-col gap-2">
-                      <div className="flex items-baseline justify-between">
+                      <div className="flex items-baseline justify-between gap-2">
                         <span className="text-[9px] font-black uppercase tracking-widest text-[var(--text)]">
                           {provider.label}
                           {!provider.available && (
@@ -298,6 +309,11 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                                 not prepared
                               </span>
                             )}
+                          {isLocal ? null : unlocked ? null : (
+                            <span className="ml-2 text-[8px] font-normal normal-case text-[var(--text-muted)]">
+                              test the link to unlock
+                            </span>
+                          )}
                         </span>
                         <span className="text-[8px] text-[var(--text-muted)]">{provider.hint}</span>
                       </div>
@@ -308,44 +324,62 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                         </p>
                       )}
 
-                      <div
-                        className={`flex flex-col gap-1 max-h-40 overflow-y-auto no-scrollbar pr-1 ${
-                          provider.available ? '' : 'opacity-40 pointer-events-none'
-                        }`}
-                      >
-                        {provider.models.map((entry) => {
-                          const checked = selected.includes(entry.id);
-                          return (
-                            <label
-                              key={entry.id}
-                              className="flex items-start gap-2 cursor-pointer group py-0.5"
-                            >
-                              <input
-                                type={isLocal ? 'radio' : 'checkbox'}
-                                name={isLocal ? `local-engine` : undefined}
-                                checked={checked}
-                                onChange={() =>
-                                  isLocal ? selectOnly(provider.slug, entry.id) : toggleModel(provider.slug, entry.id)
-                                }
-                                className="mt-0.5 w-3 h-3 accent-[var(--accent)] cursor-pointer shrink-0"
-                              />
-                              <span className="flex flex-col min-w-0">
-                                <span className="text-[9px] font-black uppercase tracking-wider text-[var(--text)] group-hover:text-[var(--accent)] transition-colors truncate">
-                                  {entry.label}
-                                  <span className="ml-2 text-[8px] font-mono font-normal text-[var(--text-muted)]">
-                                    {entry.id}
-                                  </span>
-                                </span>
-                                {entry.note && (
-                                  <span className="text-[8px] text-[var(--text-muted)] opacity-75 leading-tight">
-                                    {entry.note}
-                                  </span>
-                                )}
-                              </span>
-                            </label>
-                          );
-                        })}
+                      <div className="flex flex-col gap-1">
+                        <select
+                          value={selected}
+                          disabled={!provider.available || !unlocked}
+                          onChange={(event) =>
+                            selectFamily(provider.slug, event.target.value)
+                          }
+                          className={`w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-3 py-2.5 text-[9px] font-black uppercase tracking-wider outline-none focus:border-[var(--accent)]/50 transition-all text-[var(--text)] ${
+                            provider.available && unlocked
+                              ? 'cursor-pointer'
+                              : 'opacity-40 cursor-not-allowed'
+                          }`}
+                        >
+                          <option value="">
+                            {selected ? 'Auto ladder' : 'Auto ladder (recommended)'}
+                          </option>
+                          {provider.families.map((family) => (
+                            <option key={family.id} value={family.id}>
+                              {family.label}
+                            </option>
+                          ))}
+                        </select>
+                        {selected && (
+                          <p className="text-[8px] leading-tight text-[var(--text-muted)] opacity-75">
+                            {provider.families.find((f) => f.id === selected)?.note}
+                          </p>
+                        )}
+                        {!selected && (
+                          <p className="text-[8px] leading-tight text-[var(--text-muted)] opacity-75">
+                            {provider.families
+                              .map((family) => family.label)
+                              .join(' · ')}
+                          </p>
+                        )}
                       </div>
+
+                      {status && (
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[8px] font-mono text-[var(--text-muted)]">
+                            {provider.families.length} model
+                            {provider.families.length === 1 ? '' : 's'} in this line
+                          </span>
+                          <span
+                            className={`flex items-center gap-1 text-[8px] font-black uppercase tracking-widest ${STATUS_COLOR[status.status]}`}
+                          >
+                            {status.status === 'ok' ? (
+                              <CheckCircle2 className="w-3 h-3" />
+                            ) : status.status === 'error' ? (
+                              <CircleX className="w-3 h-3" />
+                            ) : (
+                              <CircleDashed className="w-3 h-3" />
+                            )}
+                            {status.status}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -380,17 +414,23 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   {statuses.map((entry) => {
                     const Icon = STATUS_ICON[entry.status];
                     return (
-                      <div key={entry.provider} className="flex items-center justify-between gap-2">
-                        <span className="text-[9px] font-black uppercase tracking-widest text-[var(--text-muted)]">
-                          {entry.label}
-                        </span>
-                        <span
-                          className={`flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest ${STATUS_COLOR[entry.status]}`}
-                        >
-                          <Icon className="w-3.5 h-3.5" />
-                          {entry.status}
-                          {entry.detail ? ` (${entry.detail})` : ''}
-                        </span>
+                      <div key={entry.provider} className="flex flex-col gap-0.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[9px] font-black uppercase tracking-widest text-[var(--text-muted)]">
+                            {entry.label}
+                          </span>
+                          <span
+                            className={`flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest ${STATUS_COLOR[entry.status]}`}
+                          >
+                            <Icon className="w-3.5 h-3.5" />
+                            {entry.status}
+                          </span>
+                        </div>
+                        {entry.detail && (
+                          <p className="text-[8px] leading-tight text-[var(--text-muted)] opacity-75">
+                            {entry.detail}
+                          </p>
+                        )}
                       </div>
                     );
                   })}

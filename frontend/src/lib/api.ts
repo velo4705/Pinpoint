@@ -24,9 +24,9 @@ export interface ScanOptions {
 
 /** Flatten a per-provider selection into the `provider:model` list the API wants. */
 export function selectionToIds(selection: ModelSelection): string[] {
-  return (Object.keys(selection) as CatalogSlug[]).flatMap((slug) =>
-    (selection[slug] ?? []).map((model) => `${slug}:${model}`),
-  );
+  return (Object.keys(selection) as CatalogSlug[])
+    .filter((slug) => selection[slug])
+    .map((slug) => `${slug}:${selection[slug]}`);
 }
 
 /** Longest edge, in pixels, of the image we actually send. */

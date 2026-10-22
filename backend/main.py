@@ -31,6 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
 from app.ai_engine import (
+    MODEL_CATALOGUE,
     MODEL_CHOICES,
     PROVIDERS,
     REAL_WORLD_TIERS,
@@ -238,19 +239,28 @@ async def verify_keys(
     """Check that each supplied key actually reaches its provider.
 
     Sends a one-token probe per provider. Keys are used for the probe only.
+
+    Only the operator's own keys are tested. A provider with no key from
+    the operator is reported as "unset" rather than being probed with the
+    server's key: the question this button answers is "does *my* key work?",
+    and the server's key is none of the operator's business. Probing it
+    would also report "ok" for a provider the operator never gave a key
+    for, which reads as a false pass.
     """
     _rate_limit(request)
     supplied = _collect_keys(groq_key, gemini_key, openai_key)
-    # Test the *effective* keys: an operator-supplied key, or the server's
-    # key when the operator did not supply one.
-    effective, _ = AIEngine._resolve_keys(supplied)
     engine = get_engine()
-    results = await run_in_threadpool(_verify_provider_keys, engine, effective)
+    results = await run_in_threadpool(_verify_provider_keys, engine, supplied)
     return {"providers": results}
 
 
 def _verify_provider_keys(engine: AIEngine, keys: dict[str, str]) -> list[dict]:
-    """Probe each provider with a minimal text request."""
+    """Probe each provider with a minimal text request.
+
+    Only the supplied keys are probed. The model used for the probe comes
+    from the catalogue, so it cannot quietly rot into a retired model id and
+    start reporting false failures.
+    """
     probes = {
         "groq": "https://api.groq.com/openai/v1/chat/completions",
         "openai": "https://api.openai.com/v1/chat/completions",
@@ -261,11 +271,18 @@ def _verify_provider_keys(engine: AIEngine, keys: dict[str, str]) -> list[dict]:
             continue
         key = keys.get(slug)
         if not key:
-            out.append({"provider": slug, "label": provider.label, "status": "unset"})
+            out.append(
+                {
+                    "provider": slug,
+                    "label": provider.label,
+                    "status": "unset",
+                    "detail": "no key given; the server's own key will be used",
+                }
+            )
             continue
         try:
             if provider.style == "gemini":
-                url = provider.endpoint.format(model="gemini-2.5-flash-lite")
+                url = provider.endpoint.format(model=_probe_model(slug))
                 response = requests.post(
                     f"{url}?key={key}",
                     json={"contents": [{"parts": [{"text": "ping"}]}]},
@@ -308,10 +325,15 @@ def _verify_provider_keys(engine: AIEngine, keys: dict[str, str]) -> list[dict]:
 
 
 def _probe_model(slug: str) -> str:
-    return {
-        "groq": "qwen/qwen3.8-27b",
-        "openai": "gpt-4o-mini",
-    }[slug]
+    """The model to use when probing a provider's key.
+
+    Taken from the catalogue rather than hardcoded, so the probe follows
+    the catalogue instead of outliving it.
+    """
+    for provider in MODEL_CATALOGUE:
+        if provider.slug == slug and provider.probe_model:
+            return provider.probe_model
+    return ""
 
 
 @app.post("/scan")

@@ -90,13 +90,21 @@ Designed with a "Continuous Operation" philosophy. The engine cascades through *
 *   **Offline Backup:** GeoCLIP, with a CLIP zero-shot fallback, running locally with no key at all.
 
 ### 🎯 2. Accuracy by Consensus
-A single model's word is not evidence. Each scan consults up to **three models** (`PINPOINT_VERIFY_MODELS`) and resolves their answers to coordinates, then goes with the answer they **agree** on. Answers within 75 km of each other are treated as agreeing, and a model that contradicts the others is reported as dissent rather than quietly discarded.
 
-Each model supplies two readings of its own opinion — the place name (resolved through the geocoder) and the coordinates it states outright. These are correlated, not independent, so they are collapsed into **one vote per model**; a lone model can never outvote a second.
+No single model is trusted with the answer. Each model is asked to work
+through the photograph systematically -- transcribing signage, reading the
+architecture, noting which side of the road traffic drives on -- and then to
+rank **up to three** candidate places with coordinates.
 
-On a benchmark of geotagged Commons photos, this took correct answers (within 25 km of the truth) from **3/8 to 7/8**, and turned answers like *"Bruges, Belgium"* into *"Concertgebouw Brugge, Bruges, Belgium"*.
+Those candidates are not three votes. A model's belief is *split* across
+them (0.55 / 0.30 / 0.15), so one model can never outvote another, but two
+models that both name the same runner-up **can** outvote one model's first
+guess. The engine then clusters every candidate by distance and takes the
+cluster with the most support.
 
-The reported confidence now reflects that agreement: two models that concur score above 0.9, a lone answer from a weak model scores below 0.5, and a contested answer says so.
+That is what makes the result close rather than merely plausible: the
+catastrophic failures (a confident answer on the wrong continent) are
+exactly the ones a second opinion catches.
 
 ### 💾 3. Dual-Layer Redis Caching (Upstash & Local)
 Protects API rate limits and accelerates repeated scans to **0ms latency**:
@@ -177,6 +185,44 @@ air-gapped convenience, not a production path — see *Deployment* below.
 *   **Scans run off the event loop** on a worker thread, so one slow provider cannot stall the whole API.
 *   **Per-IP rate limiting** protects the deployment's own keys (default 30 requests/minute).
 *   **Confidence is honest.** The local bunker reports its own CLIP score (typically low); cloud tiers report a score that reflects how specific the answer was, rather than a flat 99%.
+
+### 🎛️ Choosing a model
+
+The model picker shows one dropdown per provider, listing that provider's
+*lines* rather than every model it ships:
+
+| Provider | Lines |
+|---|---|
+| **Gemini** | Pro · Flash · Flash-Lite |
+| **OpenAI** | Flagship · Balanced · Cheap · Legacy |
+| **Groq** | Fast |
+| **Offline** | Auto · GeoCLIP · CLIP zero-shot |
+
+A line is a promise, not a single model. Picking **Flash** means "the Flash
+line, best first", and the engine walks down it -- `gemini-2.5-flash` first
+because it measured best, then the 3.x revisions -- until one answers. A
+model that is temporarily unavailable, over-quota or retired therefore
+costs you nothing.
+
+A cloud provider's dropdown stays locked until **Test Links** reports `ok`
+for it. Choosing a model for a provider whose key does not work would only
+produce silence.
+
+### 🔌 What "Test Links" actually checks
+
+It checks **your** key, and only your key. A provider you gave no key for is
+reported as *unset*, not *ok*:
+
+```
+GROQ    ●  unset   no key given; the server's own key will be used
+GEMINI  ●  ok
+OPENAI  ●  unset   no key given; the server's own key will be used
+```
+
+This is deliberate. Probing the server's key instead would report a pass
+for a provider you never gave a key for, which reads as a false all-clear.
+The probe model comes from the catalogue, so it cannot quietly rot into a
+retired model id and start reporting false failures.
 
 ### 💾 Saving your settings and keys
 

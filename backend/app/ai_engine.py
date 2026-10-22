@@ -152,7 +152,7 @@ def _tier(index: int, slug: str, model: str, game_capable: bool = True) -> Tier:
 
 @dataclass(frozen=True)
 class ModelEntry:
-    """One selectable model."""
+    """One concrete model."""
 
     id: str
     label: str
@@ -160,21 +160,51 @@ class ModelEntry:
     tier: int = 99
     game_capable: bool = True
 
+
+@dataclass(frozen=True)
+class ModelFamily:
+    """A group of models the operator picks between.
+
+    The picker shows families rather than individual models, because a
+    provider's catalogue is mostly noise: Google alone ships half a dozen
+    Flash revisions, and only one of them is ever the one you want. A
+    family is a promise -- "give me the Flash line" -- and the members are
+    tried in the order given, so a family that is temporarily unavailable
+    falls through to its next member instead of failing.
+    """
+
+    id: str
+    label: str
+    note: str = ""
+    models: tuple[ModelEntry, ...] = ()
+
     @property
-    def qualified(self) -> str:
-        """The ``provider:model`` form used by the API and the UI."""
-        return f"{self.provider}:{self.id}"
+    def best(self) -> ModelEntry | None:
+        return self.models[0] if self.models else None
 
 
 @dataclass(frozen=True)
 class ProviderCatalogue:
-    """A provider and the models it offers."""
+    """A provider and the model families it offers."""
 
     slug: str
     label: str
     key_env: str | None
     hint: str
-    models: tuple[ModelEntry, ...]
+    families: tuple[ModelFamily, ...]
+    #: The cheapest, steadiest model to use when probing this provider's key.
+    probe_model: str = ""
+
+    @property
+    def models(self) -> tuple[ModelEntry, ...]:
+        """Every model in every family, best family first."""
+        return tuple(model for family in self.families for model in family.models)
+
+    def family(self, family_id: str) -> ModelFamily | None:
+        for family in self.families:
+            if family.id == family_id:
+                return family
+        return None
 
 
 MODEL_CATALOGUE: tuple[ProviderCatalogue, ...] = (
@@ -183,17 +213,38 @@ MODEL_CATALOGUE: tuple[ProviderCatalogue, ...] = (
         label="Gemini",
         key_env="GOOGLE_API_KEY",
         hint="Google DeepMind",
-        models=(
-            ModelEntry("gemini-3.1-pro-preview", "3.1 Pro", "strongest; preview, quota-limited", tier=1),
-            ModelEntry("gemini-2.5-flash", "2.5 Flash", "best measured accuracy", tier=3),
-            ModelEntry("gemini-3.6-flash", "3.6 Flash", "fast", tier=4),
-            ModelEntry("gemini-3.5-flash", "3.5 Flash", "fast", tier=5),
-            ModelEntry("gemini-3.7-flash", "3.7 Flash", "fast", tier=6),
-            ModelEntry("gemini-3.8-flash", "3.8 Flash", "fast", tier=7),
-            ModelEntry("gemini-2.5-flash-lite", "2.5 Flash-Lite", "cheapest workhorse", tier=9),
-            ModelEntry("gemini-3.1-flash-lite", "3.1 Flash-Lite", "very fast", tier=10),
-            ModelEntry("gemini-3-flash-preview", "3 Flash", "preview", tier=11),
-            ModelEntry("gemini-3.1-flash-lite-preview", "3.1 Flash-Lite", "preview", tier=12),
+        probe_model="gemini-2.5-flash-lite",
+        families=(
+            ModelFamily(
+                id="pro",
+                label="Pro",
+                note="strongest reasoning; preview build, quota-limited",
+                models=(
+                    ModelEntry("gemini-3.1-pro-preview", "3.1 Pro", "preview", tier=1),
+                ),
+            ),
+            ModelFamily(
+                id="flash",
+                label="Flash",
+                note="the accuracy workhorse",
+                models=(
+                    ModelEntry("gemini-2.5-flash", "2.5 Flash", "best measured accuracy", tier=3),
+                    ModelEntry("gemini-3.6-flash", "3.6 Flash", "fast", tier=4),
+                    ModelEntry("gemini-3.5-flash", "3.5 Flash", "fast", tier=5),
+                    ModelEntry("gemini-3.7-flash", "3.7 Flash", "fast", tier=6),
+                    ModelEntry("gemini-3.8-flash", "3.8 Flash", "fast", tier=7),
+                    ModelEntry("gemini-3-flash-preview", "3 Flash", "preview", tier=8),
+                ),
+            ),
+            ModelFamily(
+                id="flash-lite",
+                label="Flash-Lite",
+                note="cheapest and quickest; less precise",
+                models=(
+                    ModelEntry("gemini-2.5-flash-lite", "2.5 Flash-Lite", "cheapest workhorse", tier=9),
+                    ModelEntry("gemini-3.1-flash-lite-preview", "3.1 Flash-Lite", "preview", tier=10),
+                ),
+            ),
         ),
     ),
     ProviderCatalogue(
@@ -201,12 +252,41 @@ MODEL_CATALOGUE: tuple[ProviderCatalogue, ...] = (
         label="OpenAI",
         key_env="OPENAI_API_KEY",
         hint="GPT vision family",
-        models=(
-            ModelEntry("gpt-6-astra", "GPT-6 Astra", "flagship, strongest", tier=2),
-            ModelEntry("gpt-6.1-sol", "GPT-6.1 Sol", "balanced", tier=8),
-            ModelEntry("gpt-6-luna", "GPT-6 Luna", "cheapest, fastest", tier=14),
-            ModelEntry("gpt-4o", "GPT-4o", "legacy; retires 2027-01-14", tier=15),
-            ModelEntry("gpt-4o-mini", "GPT-4o mini", "legacy; retires 2027-01-14", tier=16),
+        probe_model="gpt-4o-mini",
+        families=(
+            ModelFamily(
+                id="flagship",
+                label="Flagship",
+                note="strongest",
+                models=(
+                    ModelEntry("gpt-6-astra", "GPT-6 Astra", "flagship, strongest", tier=2),
+                ),
+            ),
+            ModelFamily(
+                id="balanced",
+                label="Balanced",
+                note="good accuracy, moderate cost",
+                models=(
+                    ModelEntry("gpt-6.1-sol", "GPT-6.1 Sol", "balanced", tier=8),
+                ),
+            ),
+            ModelFamily(
+                id="cheap",
+                label="Cheap",
+                note="lowest cost, fastest",
+                models=(
+                    ModelEntry("gpt-6-luna", "GPT-6 Luna", "cheapest, fastest", tier=14),
+                ),
+            ),
+            ModelFamily(
+                id="legacy",
+                label="Legacy",
+                note="older models; retire 2027-01-14",
+                models=(
+                    ModelEntry("gpt-4o", "GPT-4o", "legacy", tier=15),
+                    ModelEntry("gpt-4o-mini", "GPT-4o mini", "legacy", tier=16),
+                ),
+            ),
         ),
     ),
     ProviderCatalogue(
@@ -214,8 +294,16 @@ MODEL_CATALOGUE: tuple[ProviderCatalogue, ...] = (
         label="Groq",
         key_env="GROQ_API_KEY",
         hint="fastest inference",
-        models=(
-            ModelEntry("qwen/qwen3.8-27b", "Qwen 3.8 27B", "fast; least reliable at geolocation", tier=13),
+        probe_model="qwen/qwen3.8-27b",
+        families=(
+            ModelFamily(
+                id="fast",
+                label="Fast",
+                note="quick, but the least reliable at geolocation",
+                models=(
+                    ModelEntry("qwen/qwen3.8-27b", "Qwen 3.8 27B", "fast; least reliable at geolocation", tier=13),
+                ),
+            ),
         ),
     ),
     ProviderCatalogue(
@@ -223,10 +311,31 @@ MODEL_CATALOGUE: tuple[ProviderCatalogue, ...] = (
         label="Offline",
         key_env=None,
         hint="no key, no network, no cost",
-        models=(
-            ModelEntry("auto", "Auto", "GeoCLIP if prepared, else CLIP", tier=17, game_capable=False),
-            ModelEntry("geoclip", "GeoCLIP", "accurate; returns coordinates", tier=17, game_capable=False),
-            ModelEntry("clip", "CLIP zero-shot", "lightweight; names only", tier=17, game_capable=False),
+        families=(
+            ModelFamily(
+                id="auto",
+                label="Auto",
+                note="GeoCLIP if prepared, else CLIP",
+                models=(
+                    ModelEntry("auto", "Auto", "GeoCLIP if prepared, else CLIP", tier=17, game_capable=False),
+                ),
+            ),
+            ModelFamily(
+                id="geoclip",
+                label="GeoCLIP",
+                note="accurate; returns coordinates",
+                models=(
+                    ModelEntry("geoclip", "GeoCLIP", "accurate; returns coordinates", tier=17, game_capable=False),
+                ),
+            ),
+            ModelFamily(
+                id="clip",
+                label="CLIP zero-shot",
+                note="lightweight; names only",
+                models=(
+                    ModelEntry("clip", "CLIP zero-shot", "lightweight; names only", tier=17, game_capable=False),
+                ),
+            ),
         ),
     ),
 )
@@ -282,15 +391,23 @@ def catalogue_for_api() -> dict:
                 "available": local_available if provider.slug == "local" else True,
                 "offlineReady": local_status["prepared"] if provider.slug == "local" else True,
                 "note": local_status["detail"] if provider.slug == "local" else "",
-                "models": [
+                "families": [
                     {
-                        "id": entry.id,
-                        "label": entry.label,
-                        "note": entry.note,
-                        "tier": entry.tier,
-                        "gameCapable": entry.game_capable,
+                        "id": family.id,
+                        "label": family.label,
+                        "note": family.note,
+                        "models": [
+                            {
+                                "id": entry.id,
+                                "label": entry.label,
+                                "note": entry.note,
+                                "tier": entry.tier,
+                                "gameCapable": entry.game_capable,
+                            }
+                            for entry in family.models
+                        ],
                     }
-                    for entry in provider.models
+                    for family in provider.families
                 ],
             }
             for provider in MODEL_CATALOGUE
@@ -299,15 +416,23 @@ def catalogue_for_api() -> dict:
 
 
 def parse_model_selection(raw: str | None) -> list[str]:
-    """Parse a ``provider:model,provider:model`` selection.
+    """Parse a ``provider:family,provider:family`` selection.
 
-    Returns the qualified ids in the order given. Unknown providers or models
-    are dropped rather than raising: a stale client should degrade to the
-    models that still exist, not fail the scan.
+    Returns the qualified family ids in the order given. Unknown providers or
+    families are dropped rather than raising: a stale client should degrade to
+    the models that still exist, not fail the scan.
+
+    An exact model id is also accepted, so a client that picked a single
+    concrete model keeps working.
     """
     if not raw:
         return []
-    known = {
+    known_families = {
+        f"{provider.slug}:{family.id}"
+        for provider in MODEL_CATALOGUE
+        for family in provider.families
+    }
+    known_models = {
         f"{provider.slug}:{entry.id}"
         for provider in MODEL_CATALOGUE
         for entry in provider.models
@@ -315,8 +440,9 @@ def parse_model_selection(raw: str | None) -> list[str]:
     chosen: list[str] = []
     for part in raw.split(","):
         candidate = part.strip()
-        if candidate in known and candidate not in chosen:
-            chosen.append(candidate)
+        if candidate in known_families or candidate in known_models:
+            if candidate not in chosen:
+                chosen.append(candidate)
     return chosen
 
 
@@ -420,15 +546,32 @@ def key_scope(effective_keys: dict[str, str]) -> str:
 # --------------------------------------------------------------------------
 
 REAL_WORLD_PROMPT = (
-    "You are a geolocation analyst. Study this photograph and determine the most "
-    "specific real-world location it was taken at. Prefer the finest granularity you "
-    "can actually justify: a specific landmark, building, street, park or neighbourhood "
-    "over a city, and a city over a country. Use visual evidence only (architecture, "
-    "signage, terrain, vegetation, road markings, light); do not guess a famous place "
-    "unless the evidence supports it. Answer in exactly this format and nothing else:\n"
+    "You are an expert geolocation analyst. Work through the photograph systematically "
+    "before you commit to an answer.\n"
+    "\n"
+    "First, state the visual evidence you can actually see, in one or two short "
+    "sentences. Be literal and specific:\n"
+    "- Transcribe any readable text -- signs, shopfronts, street names, plates, posters "
+    "-- character by character, and name the script or language.\n"
+    "- Describe the architecture and building materials, the road surface, the markings "
+    "and signs, and which side of the road traffic drives on.\n"
+    "- Note the terrain, vegetation, climate, light and weather.\n"
+    "- Name anything that pins the place down: a distinct tower, a specific mountain "
+    "shape, a stadium, a particular bridge, a market stall.\n"
+    "\n"
+    "Then reason from that evidence to the most specific place you can justify: a "
+    "landmark, building, street, park or neighbourhood over a city, and a city over a "
+    "country. Do not guess a famous place unless the evidence supports it.\n"
+    "\n"
+    "Then give up to three ranked candidates, best first, in exactly this format and "
+    "nothing else:\n"
     "[NAME: Most specific place name, City, Country] [LAT: decimal degrees] "
     "[LNG: decimal degrees]\n"
-    "If you are not confident, still give your single best estimate for LAT and LNG."
+    "[NAME: Second choice, City, Country] [LAT: decimal degrees] [LNG: decimal degrees]\n"
+    "[NAME: Third choice, City, Country] [LAT: decimal degrees] [LNG: decimal degrees]\n"
+    "Give fewer lines only if you have fewer serious candidates. Never invent a place "
+    "you have no evidence for: a wrong second candidate is worse than no second "
+    "candidate."
 )
 
 
@@ -844,10 +987,22 @@ class Vote:
     #: 'both' (the two agreed).
     origin: str
     label: str
+    #: How much of this model's belief this candidate carries.
+    #:
+    #: A model that ranks three candidates splits its single vote across
+    #: them rather than casting three: rank 1 keeps the bulk, the runners-up
+    #: keep a share. That way a model's total support is one, so a chatty
+    #: model cannot outvote a decisive one -- but two models that both name
+    #: the same runner-up can still outvote one model's first guess.
+    weight: float = 1.0
 
 
 #: Two answers within this distance of each other are treated as agreeing.
 AGREEMENT_KM = 75.0
+
+#: How a model's belief is split across the candidates it ranked. They sum
+#: to one, so a model's total support never exceeds a single vote.
+CANDIDATE_WEIGHTS = (0.55, 0.30, 0.15)
 
 #: How many models a single scan may consult. Independent agreement is what
 #: makes the result trustworthy, so this is deliberately greater than one.
@@ -863,6 +1018,45 @@ TIER_TRUST = {
     "groq": 0.45,
     "local": 0.35,
 }
+
+
+def parse_ranked_candidates(text: str) -> list[tuple[str, tuple[float, float] | None]]:
+    """Pull the model's ranked candidates out of a reply.
+
+    Each candidate is a ``[NAME: ...]`` tag paired with the coordinates that
+    follow it. A reply that names a place without coordinates still counts;
+    the coordinates are simply unknown, and the name is geocoded instead.
+
+    Only the leading candidate's coordinates are read when a reply mixes
+    formats, so a stray coordinate elsewhere in the prose cannot be attached
+    to the wrong place.
+    """
+    if not text:
+        return []
+    results: list[tuple[str, tuple[float, float] | None]] = []
+    pattern = re.compile(
+        r"\[NAME\s*:\s*([^\]]+)\]"
+        r"(?:\s*\[LAT\s*:\s*(-?\d+(?:\.\d+)?)\])?"
+        r"(?:\s*\[(?:LNG|LON)\s*:\s*(-?\d+(?:\.\d+)?)\])?",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(text):
+        name = _clean_place(match.group(1))
+        if not name or _is_placeholder(name):
+            continue
+        coordinates: tuple[float, float] | None = None
+        if match.group(2) and match.group(3):
+            try:
+                lat = float(match.group(2))
+                lon = float(match.group(3))
+            except ValueError:
+                lat = lon = None
+            if lat is not None and lon is not None and -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                coordinates = (lat, lon)
+        if any(existing[0] == name for existing in results):
+            continue
+        results.append((name, coordinates))
+    return results
 
 
 def parse_model_coordinates(text: str) -> tuple[float, float] | None:
@@ -971,7 +1165,16 @@ class AIEngine:
 
     # -- provider calls ----------------------------------------------------
 
-    def _call_gemini(self, provider: Provider, model: str, b64: str, prompt: str, key: str) -> str | None:
+    def _call_gemini(
+        self,
+        provider: Provider,
+        model: str,
+        b64: str,
+        prompt: str,
+        key: str,
+        out_of_quota: set[str] | None = None,
+    ) -> str | None:
+        """Ask Gemini. A 429 means the whole key is out of quota."""
         url = provider.endpoint.format(model=model)
         payload = {
             "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": b64}}]}]
@@ -982,6 +1185,8 @@ class AIEngine:
             )
             if response.status_code != 200:
                 print(f"[{provider.slug}/{model}] HTTP {response.status_code}")
+                if response.status_code == 429 and out_of_quota is not None:
+                    out_of_quota.add(provider.slug)
                 return None
             parts = response.json()["candidates"][0]["content"]["parts"]
             texts = [part.get("text", "") for part in parts if part.get("text")]
@@ -999,7 +1204,13 @@ class AIEngine:
             return None
 
     def _call_openai_chat(
-        self, provider: Provider, model: str, b64: str, prompt: str, key: str
+        self,
+        provider: Provider,
+        model: str,
+        b64: str,
+        prompt: str,
+        key: str,
+        out_of_quota: set[str] | None = None,
     ) -> str | None:
         headers = {
             "Authorization": f"Bearer {key}",
@@ -1023,6 +1234,8 @@ class AIEngine:
             response = requests.post(provider.endpoint, headers=headers, json=payload, timeout=15)
             if response.status_code != 200:
                 print(f"[{provider.slug}/{model}] HTTP {response.status_code}")
+                if response.status_code == 429 and out_of_quota is not None:
+                    out_of_quota.add(provider.slug)
                 return None
             content = response.json()["choices"][0]["message"]["content"]
             return (content or "").strip() or None
@@ -1037,6 +1250,7 @@ class AIEngine:
         b64: str,
         prompt: str,
         keys: dict[str, str],
+        out_of_quota: set[str] | None = None,
     ) -> Prediction | None:
         provider = tier.provider
         key = keys.get(provider.slug)
@@ -1044,9 +1258,9 @@ class AIEngine:
             return None
 
         if provider.style == GEMINI:
-            text = self._call_gemini(provider, tier.model, b64, prompt, key)
+            text = self._call_gemini(provider, tier.model, b64, prompt, key, out_of_quota)
         else:
-            text = self._call_openai_chat(provider, tier.model, b64, prompt, key)
+            text = self._call_openai_chat(provider, tier.model, b64, prompt, key, out_of_quota)
         if not text:
             return None
         return Prediction(
@@ -1055,6 +1269,37 @@ class AIEngine:
             tier=tier.index,
             confidence=0.88,
         )
+
+    def _selection_groups(self, selection: Sequence[str]) -> list[list[Tier]]:
+        """Expand an operator's selection into groups of fallback models.
+
+        One selection entry is one voice. A family entry expands to its
+        members in accuracy order, and the engine tries them in turn until
+        one answers -- so "Flash" means "the Flash line, best first", not
+        "every Flash revision gets a vote".
+        """
+        ladder = REAL_WORLD_TIERS
+        by_key = {f"{tier.provider.slug}:{tier.model}": tier for tier in ladder}
+        groups: list[list[Tier]] = []
+        for item in selection:
+            provider_slug, _, name = item.partition(":")
+            provider = next((p for p in MODEL_CATALOGUE if p.slug == provider_slug), None)
+            if provider is None:
+                continue
+            family = provider.family(name)
+            if family is not None:
+                members = [
+                    by_key[f"{provider.slug}:{entry.id}"]
+                    for entry in family.models
+                    if f"{provider.slug}:{entry.id}" in by_key
+                ]
+                if members:
+                    groups.append(members)
+                continue
+            tier = by_key.get(item)
+            if tier is not None:
+                groups.append([tier])
+        return groups
 
     def _select_tiers(
         self, model: str, mode: str, selection: Sequence[str] | None = None
@@ -1069,11 +1314,30 @@ class AIEngine:
         ladder = GAME_TIERS if mode == "game" else REAL_WORLD_TIERS
 
         if selection:
+            chosen: list[Tier] = []
             by_key = {
                 f"{tier.provider.slug}:{tier.model}": tier
                 for tier in ladder
             }
-            chosen = [by_key[item] for item in selection if item in by_key]
+            for item in selection:
+                provider_slug, _, name = item.partition(":")
+                provider = next(
+                    (p for p in MODEL_CATALOGUE if p.slug == provider_slug), None
+                )
+                if provider is None:
+                    continue
+                family = provider.family(name)
+                if family is not None:
+                    # A family is a fallback list: its members are tried in
+                    # order, so an unavailable model does not fail the scan.
+                    for entry in family.models:
+                        tier = by_key.get(f"{provider.slug}:{entry.id}")
+                        if tier is not None:
+                            chosen.append(tier)
+                    continue
+                tier = by_key.get(item)
+                if tier is not None:
+                    chosen.append(tier)
             if chosen:
                 return tuple(chosen)
 
@@ -1115,6 +1379,8 @@ class AIEngine:
         if selection:
             # An explicit selection is the operator saying which models to
             # use; honour it rather than silently consulting fewer of them.
+            # One selection entry is one voice, however many models its
+            # family holds -- the extra models are fallbacks, not voters.
             budget = min(len(selection), MAX_SELECTED_MODELS)
         selection_tag = "-".join(selection) if selection else "auto"
         img_cache_key = f"pinpoint:img:{img_hash}:{model}:{scope}:v{budget}:{selection_tag}"
@@ -1135,37 +1401,69 @@ class AIEngine:
         votes: list[Vote] = []
         consulted: list[str] = []
         providers_used: set[str] = set()
+        # Providers whose key reported a rate limit during this scan. When a
+        # provider is out of quota every one of its models is, so the cascade
+        # stops trying that provider instead of burning a call per sibling.
+        out_of_quota: set[str] = set()
 
         # 'local-only' means exactly that: consult the offline model and
         # nothing else.
         cloud_only = model != "local-only"
 
         if cloud_only:
-            for tier in self._select_tiers(model, "real-world", selection):
+            if selection:
+                groups = self._selection_groups(selection)
+            else:
+                # The auto ladder descends rung by rung, one model per rung.
+                groups = [[tier] for tier in self._select_tiers(model, "real-world")]
+
+            for group in groups:
                 if len(votes) >= budget:
                     break
                 if time.monotonic() > deadline:
                     print("[scan] deadline reached -- stopping cascade")
                     break
-                # Prefer independent providers: two models from the same
-                # vendor are a weaker check than one model from each.
-                if tier.provider.slug in providers_used and len(providers_used) < budget:
-                    continue
+                answered = False
+                for tier in group:
+                    if len(votes) >= budget:
+                        break
+                    if time.monotonic() > deadline:
+                        print("[scan] deadline reached -- stopping cascade")
+                        break
+                    if tier.provider.slug in out_of_quota:
+                        # The key is out of quota, so every sibling model in
+                        # this group is too. Trying them all would just burn
+                        # time and rate limit further.
+                        print(f"[{tier.provider.label}] out of quota -- skipping the rest")
+                        break
+                    attempt = self._call_tier(
+                        tier, image_bytes, b64, REAL_WORLD_PROMPT, keys, out_of_quota
+                    )
+                    if not attempt:
+                        # The model failed -- quota, overload, a dead id.
+                        # The next member of the family gets a turn.
+                        continue
+                    attempt_candidates = extract_location_candidates(attempt.text)
+                    if not attempt_candidates:
+                        # The model answered, but not with a place ("[NAME:
+                        # Unknown, Unknown]"). A non-answer is a failed rung,
+                        # so keep descending the ladder rather than pinning a
+                        # guess.
+                        print(f"[{tier.provider.label}/{tier.model}] no usable place name -- next rung")
+                        continue
 
-                attempt = self._call_tier(tier, image_bytes, b64, REAL_WORLD_PROMPT, keys)
-                if not attempt:
-                    continue
-                attempt_candidates = extract_location_candidates(attempt.text)
-                if not attempt_candidates:
-                    # The model answered, but not with a place ("[NAME: Unknown,
-                    # Unknown]"). A non-answer is a failed rung, so keep
-                    # descending the ladder rather than pinning a guess.
-                    print(f"[{tier.provider.label}/{tier.model}] no usable place name -- next rung")
-                    continue
-
-                providers_used.add(tier.provider.slug)
-                consulted.append(attempt.source)
-                votes.extend(self._votes_for(tier, attempt, attempt_candidates))
+                    providers_used.add(tier.provider.slug)
+                    consulted.append(attempt.source)
+                    new_votes = self._votes_for(tier, attempt, attempt_candidates)
+                    if not new_votes:
+                        print(f"[{tier.provider.label}/{tier.model}] no usable coordinates -- next rung")
+                        continue
+                    votes.extend(new_votes)
+                    answered = True
+                    break
+                if not answered and group:
+                    tier = group[0]
+                    print(f"[{tier.provider.label}] no model in this group answered")
 
         # The local model is free and offline, so it is consulted in every
         # scan as an *independent* cross-check. It is deliberately not a
@@ -1222,57 +1520,97 @@ class AIEngine:
     def _votes_for(
         self, tier: Tier, prediction: Prediction, candidates: list[str]
     ) -> list[Vote]:
-        """Turn one model's reply into a single vote.
+        """Turn one model's reply into votes.
 
-        A reply carries two readings of the same opinion: the place name
-        (which goes through the geocoder) and the coordinates the model
-        stated outright. They are *not* independent, so they must never be
-        counted as two votes -- otherwise one model could outvote another.
+        A reply carries two readings of the same opinion for its first
+        candidate: the place name (which goes through the geocoder) and the
+        coordinates the model stated outright. They are *not* independent,
+        so they must never be counted as two votes -- otherwise one model
+        could outvote another.
 
         When they agree, the model's own coordinates win, because they are
         the more precise of the two. When they disagree, the geocoded name
         wins, because a name that resolves to a real place is more
         trustworthy than coordinates the model asserted.
+
+        A model that ranked several candidates has its one vote *split*
+        across them, most to the first. The runners-up are taken from the
+        model's own coordinates -- they are not geocoded, because that would
+        mean several lookups against a service that asks for one request a
+        second, and the model has already said where they are.
         """
-        model_coords = parse_model_coordinates(prediction.text)
-        geocoded_name, geocoded_coords, _attempts = self._map_lock(candidates)
+        ranked = parse_ranked_candidates(prediction.text)
+        if not ranked:
+            # A model that ignored the tag format still gets its chance:
+            # fall back to the plain candidate names.
+            ranked = [(name, None) for name in candidates[: len(CANDIDATE_WEIGHTS)]]
+        if not ranked:
+            return []
 
-        if geocoded_coords:
-            if model_coords:
-                distance = haversine_km(
-                    model_coords[0], model_coords[1], geocoded_coords[0], geocoded_coords[1]
-                )
-                if distance <= AGREEMENT_KM:
-                    return [
-                        Vote(
-                            coordinates=model_coords,
-                            source=prediction.source,
-                            tier=tier.index,
-                            origin="both",
-                            label=geocoded_name or candidates[0],
-                        )
-                    ]
-            return [
+        votes: list[Vote] = []
+        for index, (name, coordinates) in enumerate(ranked[: len(CANDIDATE_WEIGHTS)]):
+            weight = CANDIDATE_WEIGHTS[index]
+            if index == 0:
+                vote = self._first_candidate_vote(tier, prediction, name, coordinates, candidates)
+                if vote is None:
+                    continue
+                votes.append(vote)
+                continue
+            if coordinates is None:
+                continue
+            votes.append(
                 Vote(
-                    coordinates=geocoded_coords,
-                    source=prediction.source,
-                    tier=tier.index,
-                    origin="name",
-                    label=geocoded_name or candidates[0],
-                )
-            ]
-
-        if model_coords:
-            return [
-                Vote(
-                    coordinates=model_coords,
+                    coordinates=coordinates,
                     source=prediction.source,
                     tier=tier.index,
                     origin="model",
-                    label=candidates[0],
+                    label=name,
+                    weight=weight,
                 )
-            ]
-        return []
+            )
+        return votes
+
+    def _first_candidate_vote(
+        self,
+        tier: Tier,
+        prediction: Prediction,
+        name: str,
+        coordinates: tuple[float, float] | None,
+        candidates: list[str],
+    ) -> Vote | None:
+        """Resolve the leading candidate, preferring a corroborated reading."""
+        geocoded_name, geocoded_coords, _attempts = self._map_lock(candidates or [name])
+
+        if geocoded_coords:
+            if coordinates:
+                distance = haversine_km(
+                    coordinates[0], coordinates[1], geocoded_coords[0], geocoded_coords[1]
+                )
+                if distance <= AGREEMENT_KM:
+                    return Vote(
+                        coordinates=coordinates,
+                        source=prediction.source,
+                        tier=tier.index,
+                        origin="both",
+                        label=geocoded_name or name,
+                    )
+            return Vote(
+                coordinates=geocoded_coords,
+                source=prediction.source,
+                tier=tier.index,
+                origin="name",
+                label=geocoded_name or name,
+            )
+
+        if coordinates:
+            return Vote(
+                coordinates=coordinates,
+                source=prediction.source,
+                tier=tier.index,
+                origin="model",
+                label=name,
+            )
+        return None
 
     def _local_vote(self, image_bytes: bytes) -> Vote | None:
         """The offline model's opinion, as a vote.
@@ -1318,18 +1656,21 @@ class AIEngine:
             models = {vote.source for vote in cluster}
             agreeing = any(vote.origin == "both" for vote in cluster)
             best_tier = min(vote.tier for vote in cluster)
-            # Most independent models wins; then a model whose own signals
-            # agreed; then the strongest tier.
-            return (-len(models), -int(agreeing), best_tier)
+            # Most belief first. A model's belief is split across the
+            # candidates it ranked, so this compares *support*, not the
+            # number of raw votes. Then most independent models, then a
+            # model whose own signals agreed, then the strongest tier.
+            support = sum(vote.weight for vote in cluster)
+            return (-round(support, 6), -len(models), -int(agreeing), best_tier)
 
         clusters.sort(key=cluster_key)
         winner_cluster = clusters[0]
 
         # Prefer a vote whose own name and coordinates agreed, then the
-        # strongest tier.
+        # strongest tier, then the heaviest weight.
         winner = min(
             winner_cluster,
-            key=lambda vote: (vote.origin != "both", vote.tier),
+            key=lambda vote: (vote.origin != "both", vote.tier, -vote.weight),
         )
 
         cluster_models = {vote.source for vote in winner_cluster}

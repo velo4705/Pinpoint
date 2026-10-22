@@ -40,7 +40,7 @@ export interface ByokKeys {
 
 export const EMPTY_KEYS: ByokKeys = { groq: '', gemini: '', openai: '' };
 
-/** One selectable model, as published by the API's /models endpoint. */
+/** One concrete model, as published by the API's /models endpoint. */
 export interface CatalogModel {
   id: string;
   label: string;
@@ -50,7 +50,23 @@ export interface CatalogModel {
   gameCapable: boolean;
 }
 
-/** A provider and the models it offers. */
+/**
+ * A group of models the operator picks between.
+ *
+ * The picker shows families rather than individual models, because a
+ * provider's catalogue is mostly noise: Google alone ships half a dozen
+ * Flash revisions and only one of them is ever the one you want. Picking a
+ * family means "give me that line", and the engine tries its members in
+ * accuracy order until one answers.
+ */
+export interface CatalogFamily {
+  id: string;
+  label: string;
+  note: string;
+  models: CatalogModel[];
+}
+
+/** A provider and the model families it offers. */
 export interface CatalogProvider {
   slug: CatalogSlug;
   label: string;
@@ -65,7 +81,7 @@ export interface CatalogProvider {
   offlineReady?: boolean;
   /** Why the provider is unavailable, or how to make it available. */
   note?: string;
-  models: CatalogModel[];
+  families: CatalogFamily[];
 }
 
 export interface ModelCatalog {
@@ -73,11 +89,11 @@ export interface ModelCatalog {
 }
 
 /**
- * Which models a scan should consult, per provider.
+ * Which family a scan should consult, per provider.
  *
- * An empty list for a provider means "let the engine decide".
+ * One family per provider, and no entry means "let the engine decide".
  */
-export type ModelSelection = Partial<Record<CatalogSlug, string[]>>;
+export type ModelSelection = Partial<Record<CatalogSlug, string>>;
 
 export const PROVIDER_META: Record<ProviderSlug, { label: string; hint: string }> = {
   groq: { label: 'Groq', hint: 'gsk_... - fastest inference' },

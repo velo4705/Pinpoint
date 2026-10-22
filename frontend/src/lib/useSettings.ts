@@ -54,10 +54,9 @@ interface Store {
 function sameSelection(a: ModelSelection, b: ModelSelection): boolean {
   const slugs = new Set<string>([...Object.keys(a), ...Object.keys(b)]);
   for (const slug of slugs) {
-    const left = (a as Record<string, string[]>)[slug] ?? [];
-    const right = (b as Record<string, string[]>)[slug] ?? [];
-    if (left.length !== right.length) return false;
-    if (left.some((id: string, index: number) => id !== right[index])) return false;
+    const left = (a as Record<string, string | undefined>)[slug];
+    const right = (b as Record<string, string | undefined>)[slug];
+    if ((left ?? '') !== (right ?? '')) return false;
   }
   return true;
 }
