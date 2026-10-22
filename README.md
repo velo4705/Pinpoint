@@ -1,16 +1,15 @@
 # 📍 PROJECT PINPOINT
-### *A Production-Grade, 14-Tier Federated AI Discovery & Geolocation Engine*
+### *A Production-Grade, 15-Tier Federated AI Discovery & Geolocation Engine*
 
 [![Next.js](https://img.shields.io/badge/Frontend-Next.js%2016-black?style=for-the-badge&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Redis](https://img.shields.io/badge/Cache-Upstash%20Redis-red?style=for-the-badge&logo=redis&logoColor=white)](https://upstash.com/)
-[![Render](https://img.shields.io/badge/Host-Render.com-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://render.com/)
 [![Vercel](https://img.shields.io/badge/Deploy-Vercel-black?style=for-the-badge&logo=vercel&logoColor=white)](https://vercel.com/)
 [![MIT License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
 
 ---
 
-**Project Pinpoint** is a state-of-the-art, open-source AI reverse-image geoguessing and vector coordinate engine. Built on a **14-tier cloud-native federated fallback network**, Pinpoint leverages the world's most powerful vision models alongside a localized offline bunker (CLIP) to identify physical coordinates from real-world scenery or procedural game maps instantly.
+**Project Pinpoint** is a state-of-the-art, open-source AI reverse-image geoguessing and vector coordinate engine. Built on a **15-tier cloud-native federated fallback network**, Pinpoint leverages the world's most powerful vision models to identify physical coordinates from real-world scenery or procedural game maps instantly. Production runs on the cloud tiers and your own keys only; the offline GeoCLIP tier is for development and air-gapped use.
 
 ---
 
@@ -20,7 +19,7 @@ Pinpoint does **not** require you to trust a hosted instance with your model bud
 
 * Paste a **Groq**, **Gemini** or **OpenAI** key into **Settings → Neural Link Override** and it is used for your scans instead of the server's.
 * Keys travel with a single scan request. The server **never** writes them to disk, to the cache, to the Discovery Vault, or to the log.
-* By default they live only in memory and disappear when the tab closes. *Remember keys on this device* opts into `localStorage` — convenient, but readable by any script on that origin, so it is off by default.
+* By default they live only in memory and disappear when the tab closes. Ticking **Keep keys on this device** opts into `localStorage` — convenient, but readable by any script on that origin, so it is off by default. Keys are **not** written until you press **Save**.
 * Results produced with your own key are cached in a separate namespace, so they never mix with (or overwrite) the shared cache.
 
 The same keys can be provided server-side through environment variables (see `.env.example`). A BYOK key always wins over the server's key for that provider.
@@ -30,51 +29,65 @@ The same keys can be provided server-side through environment variables (see `.e
 The same panel lets you choose **which models** to run, not just which provider holds the key.
 
 * **Auto ladder** (the default) — the engine consults models in its own accuracy order and keeps the answer they agree on.
-* **Manual** — tick exactly the models you want. Only those are consulted, in the order shown, and the number beside each one is the engine's recommended rank.
-* The picker is built from the API's own `/models` endpoint, so a model can never be offered that the engine cannot reach.
-* The local model is a radio: **Auto** (GeoCLIP if installed, else CLIP), **GeoCLIP**, or **CLIP zero-shot**.
+* **Manual** — pick one line per provider from the dropdowns. Only that line is consulted, and the engine walks it best-first until one answers.
+* The picker is built from the API's own `/models` endpoint, so a line can never be offered that the engine cannot reach.
+* A cloud provider's dropdown stays locked until **Test Links** reports `ok` for it — choosing a model for a provider whose key does not work would only produce silence.
+* **Offline** — the local engine is its own picker: **Auto** (GeoCLIP if installed, else CLIP), **GeoCLIP**, or **CLIP zero-shot**.
 
-A manual selection also overrides the verify budget: if you name five models, five are consulted.
+A manual selection also overrides the verify budget: if you name five lines, up to five models are consulted across them.
+
+### What each line means
+
+The picker shows *lines*, not individual models, because a provider's catalogue is mostly noise. A line is a promise — "give me that line" — and the engine tries its members in accuracy order until one answers:
+
+| Line | Members (tried best-first) | Notes |
+|---|---|---|
+| Gemini · Pro | `gemini-3.1-pro-preview` | Strongest; preview, quota-limited |
+| Gemini · Flash | `gemini-2.5-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`, `gemini-3-flash-preview` | The accuracy workhorse |
+| Gemini · Flash-Lite | `gemini-2.5-flash-lite`, `gemini-3.1-flash-lite-preview` | Cheapest and quickest; less precise |
+| OpenAI · Flagship | `gpt-6-astra` | Flagship, strongest single model |
+| OpenAI · Balanced | `gpt-6.1-sol` | Balanced |
+| OpenAI · Cheap | `gpt-6-luna` | Cheapest, fastest |
+| OpenAI · Legacy | `gpt-4o`, `gpt-4o-mini` | Retire 2027-01-14 |
+| Groq · Fast | `qwen/qwen3.8-27b` | Fast, but measured least reliable at geolocation |
+| Offline · Auto | GeoCLIP if prepared, else CLIP | No key, no network, no cost |
+| Offline · GeoCLIP | GeoCLIP | Accurate; returns coordinates |
+| Offline · CLIP zero-shot | CLIP zero-shot | Lightweight; names only |
+
+Each rung is skipped automatically when its provider has no key, so the effective ladder is as long as the keys you have. A scan also carries a wall-clock budget (`SCAN_DEADLINE_SECONDS`, default 90s) so a long outage cannot hold a request open indefinitely.
 
 ---
 
-## 🧠 14-Tier Neural Pipeline & Architecture
+## 🧠 15-Tier Neural Pipeline & Architecture
 
 When an image is submitted, Pinpoint runs it through a stateful architecture designed for sub-second responses and flawless map locking:
 
-```mermaid
-graph TD
-    A[Client Uploads Image] --> B{Layer 1: Redis MD5 Hash Cache}
-    B -- Hit [Sub-millisecond] --> C[Instant Map Lock & Render]
-    B -- Miss --> D[Tier 1: Gemini 3.1 Flash-Lite]
+*   **Client uploads image** — downscaled client-side to a 1600 px long edge so Vercel's 4.5 MB body cap is never hit.
+*   **Layer 1: Redis MD5 Hash Cache** — identical pictures bypass the AI stack entirely.
+*   **Tier cascade** — models are consulted in accuracy order; a provider whose key has no quota is skipped entirely, so the engine never burns calls on a dead tier. Consensus decides between independent providers, not between two answers from the same vendor.
+*   **Layer 2: Redis Geocode Cache** — saved coordinates protect Nominatim from rate limits.
+*   **Nominatim live map search** — fallback when the geocode cache misses; results are cached back.
+*   **Ranked candidate fallback** — when no model produces a usable place name.
 
-    D -- Fail --> E[Tier 2: Groq Qwen 3.8 27B]
-    E -- Fail --> F[Tiers 3-12: OpenAI + Gemini Fleet]
-    F -- Fail --> G[Tier 13: Gemini 3.1 Pro]
-    G -- Fail --> H[Tier 14: Local CLIP Bunker]
+Offline GeoCLIP runs as an independent cross-check, never as a voter: it agrees or differs, but never dresses a wrong cloud answer up as confirmed.
 
-    D & E & F & G & H -- AI Location text --> I{Layer 2: Redis Geocode Cache}
-    I -- Hit --> C
-    I -- Miss --> J[Nominatim Live Map Search]
-    J -- Success --> K[Cache Geocode & Image Hash] --> C
-    J -- No Match --> L[Ranked Candidate Fallback] --> J
-```
+### The model lines
 
-### The ladder
+| Provider | Line | Members (tried best-first) | Notes |
+|---|---|---|---|
+| Gemini | Pro | `gemini-3.1-pro-preview` | Strongest; preview, quota-limited |
+| Gemini | Flash | `gemini-2.5-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`, `gemini-3-flash-preview` | Best measured accuracy; fallback chain |
+| Gemini | Flash-Lite | `gemini-2.5-flash-lite`, `gemini-3.1-flash-lite-preview` | Cost floor |
+| OpenAI | Flagship | `gpt-6-astra` | Flagship, strongest single model |
+| OpenAI | Balanced | `gpt-6.1-sol` | Balanced |
+| OpenAI | Cheap | `gpt-6-luna` | Cheapest, fastest |
+| OpenAI | Legacy | `gpt-4o`, `gpt-4o-mini` | `gpt-4o` retires 2027-01-14 |
+| Groq | Fast | `qwen/qwen3.8-27b` | Fast, but measured *least* reliable at geolocation |
+| Offline | Auto | GeoCLIP if prepared, else CLIP | No key, no network, no cost |
+| Offline | GeoCLIP | GeoCLIP | Accurate; returns coordinates |
+| Offline | CLIP zero-shot | CLIP zero-shot | Lightweight; names only |
 
-| Tier | Provider | Model | Notes |
-|------|----------|-------|-------|
-| 1 | Gemini | `gemini-3.1-pro-preview` | Strongest Gemini; preview and quota-limited |
-| 2 | OpenAI | `gpt-6-astra` | Flagship, strongest single model |
-| 3 | Gemini | `gemini-2.5-flash` | **Best measured accuracy** in the fleet |
-| 4–7 | Gemini | `3.6-flash`, `3.5-flash`, `3.7-flash`, `3.8-flash` | Mid fleet |
-| 8 | OpenAI | `gpt-6.1-sol` | Balanced |
-| 9–12 | Gemini | `2.5-flash-lite`, `3.1-flash-lite`, `3-flash-preview`, `3.1-flash-lite-preview` | Cost floor |
-| 13 | Groq | `qwen/qwen3.8-27b` | Fast, but measured *least* reliable at geolocation |
-| 14–16 | OpenAI | `gpt-6-luna`, `gpt-4o`, `gpt-4o-mini` | `gpt-4o` retires 2027-01-14 |
-| — | Local | GeoCLIP / CLIP | **Offline.** No key, no network, no cost |
-
-Each rung is skipped automatically when its provider has no key, so the effective ladder is as long as the keys you have. A scan also carries a wall-clock budget (`SCAN_DEADLINE_SECONDS`, default 90s) so a long outage cannot hold a request open indefinitely.
+Each line is skipped automatically when its provider has no key, so the effective ladder is as long as the keys you have. A scan also carries a wall-clock budget (`SCAN_DEADLINE_SECONDS`, default 90s) so a long outage cannot hold a request open indefinitely.
 
 > **Note on GitHub Models:** the former GitHub rungs were removed. GitHub retired the entire GitHub Models service — playground, catalog, inference API and BYOK — on **2026-07-30**, so those rungs could never fire again. Their slots went to current Gemini models and to OpenAI.
 
@@ -83,7 +96,7 @@ Each rung is skipped automatically when its provider has no key, so the effectiv
 ## 🌟 Key Architectural Achievements
 
 ### 🚀 1. The Tiered Federated Alliance
-Designed with a "Continuous Operation" philosophy. The engine cascades through **16 cloud models** and falls back to a **local, offline geolocator** if the internet is fully severed.
+Designed with a "Continuous Operation" philosophy. The engine cascades through **15 cloud models** and falls back to a **local, offline geolocator** if the internet is fully severed.
 *   **Lead Tier:** `Gemini-3.1-pro-preview`, then `GPT-6 Astra` (strongest available reasoning).
 *   **Workhorse:** `Gemini-2.5-flash` (measured the most reliable geolocator in the fleet).
 *   **Speed Tier:** `Groq Qwen 3.8 27B` — fast, but measured the *least* reliable at geolocation, so it is consulted only after the accurate tiers are ruled out.
@@ -106,12 +119,14 @@ That is what makes the result close rather than merely plausible: the
 catastrophic failures (a confident answer on the wrong continent) are
 exactly the ones a second opinion catches.
 
-### 💾 3. Dual-Layer Redis Caching (Upstash & Local)
-Protects API rate limits and accelerates repeated scans to **0ms latency**:
-*   **Layer 1 (Image Hash Cache):** Computes MD5 of image files. Identical pictures completely bypass the AI stack.
-*   **Layer 2 (Geocoding Cache):** Saves exact coordinates of found locations, protecting Nominatim from rate limits.
+### 💾 3. Redis Caching (single layer)
+Protects API rate limits and accelerates repeated scans:
+*   **Image Hash Cache:** Computes an MD5 of each upload. Identical pictures bypass the AI stack entirely and return the cached answer.
+*   **Geocode Cache:** Saves found coordinates so Nominatim is not re-contacted for the same place.
 
-Cache entries are namespaced by a one-way fingerprint of the keys that produced them, so BYOK results stay separate from shared results.
+Redis is reached through a single `REDIS_URL` (e.g. Upstash). When `REDIS_URL` is unset or unreachable, the engine runs stateless with no cache at all — there is no second "local" cache layer, and cache hits are never truly 0ms (they are a Redis round trip within TTL).
+
+Cache entries are namespaced by a one-way fingerprint of the keys that produced them, so BYOK results stay separate from shared results. TTLs: image answers 7 days, geocodes 30 days.
 
 ### 🗺️ 4. Strict Map Lock with a Ranked Candidate Parser
 Fuzzy administrative regions and conversational model responses (*"This image was taken at Abisko, Sweden..."*) are parsed automatically. The parser produces a **ranked list** of place candidates — the full name first, then progressively looser forms (`Paris, France`, then `Eiffel Tower, France`) — and the first candidate that geocodes wins. Non-answers such as `N/A` or `Unknown` are rejected rather than silently pinned to an arbitrary village.
@@ -184,7 +199,7 @@ air-gapped convenience, not a production path — see *Deployment* below.
 *   **Uploads are size-capped** (default 12 MB) and rejected with HTTP 413 before they can exhaust memory.
 *   **Scans run off the event loop** on a worker thread, so one slow provider cannot stall the whole API.
 *   **Per-IP rate limiting** protects the deployment's own keys (default 30 requests/minute).
-*   **Confidence is honest.** The local bunker reports its own CLIP score (typically low); cloud tiers report a score that reflects how specific the answer was, rather than a flat 99%.
+*   **Confidence is honest.** The local bunker reports its own GeoCLIP score (typically low); cloud tiers report a score that reflects how specific the answer was, rather than a flat 99%.
 
 ### 🎛️ Choosing a model
 
@@ -286,7 +301,7 @@ limit, so the local tier **cannot run there** — the model simply will not
 load. The API detects this and says so:
 
 ```json
-GET /health  ->  {"local_bunker": false, "tiers": 16, ...}
+GET /health  ->  {"local_bunker": false, "tiers": 15, ...}
 ```
 
 The model picker marks the local engine as *"not installed here"* and greys
