@@ -1,0 +1,153 @@
+- generic [ref=f1e1]:
+  - main [ref=f1e2]:
+    - generic [ref=f1e5]:
+      - region "Map" [ref=f1e6]
+      - group [ref=f1e7]:
+        - generic "Toggle attribution" [ref=f1e8] [cursor=pointer]
+        - generic [ref=f1e9]:
+          - link "MapLibre" [ref=f1e72] [cursor=pointer]:
+            - /url: https://maplibre.org/
+          - text: "| ©"
+          - link "OpenStreetMap" [ref=f1e73] [cursor=pointer]:
+            - /url: https://www.openstreetmap.org/copyright
+          - text: contributors ©
+          - link "CARTO" [ref=f1e74] [cursor=pointer]:
+            - /url: https://carto.com/about-carto/
+    - navigation:
+      - generic [ref=f1e11]:
+        - button "World Discovery" [ref=f1e12]
+        - button "Neural Scanner" [ref=f1e15]
+    - generic [ref=f1e19]:
+      - generic [ref=f1e20]:
+        - generic [ref=f1e21]:
+          - heading "IDENTIFIER" [level=2] [ref=f1e22]
+          - generic [ref=f1e28]: Core Engine v2.0
+        - generic [ref=f1e29]:
+          - button "Real World" [ref=f1e30]
+          - button "Gaming" [ref=f1e31]
+      - generic [ref=f1e32]:
+        - generic [ref=f1e39] [cursor=pointer]:
+          - paragraph [ref=f1e40]: Initialize Imagery
+          - paragraph [ref=f1e41]: Upload photo for neural scan
+        - button "INITIALIZE NEURAL SCAN" [disabled] [ref=f1e42]
+      - generic [ref=f1e48]:
+        - paragraph [ref=f1e49]: Pinpoint Intelligence
+        - paragraph [ref=f1e50]: Universal Geolocation Helper active.
+    - generic [ref=f1e51]:
+      - button "Open discovery vault" [ref=f1e52]
+      - button "Toggle theme" [ref=f1e57]
+      - button "Open settings" [active] [ref=f1e64]
+      - button "Open system information" [ref=f1e68]
+    - generic [ref=f1e76]:
+      - generic [ref=f1e77]:
+        - heading "System Control Panel" [level=2] [ref=f1e82]
+        - button [ref=f1e83]
+      - generic [ref=f1e87]:
+        - generic [ref=f1e88]: Neural Link Override
+        - paragraph [ref=f1e92]: Use your own API keys instead of the server's. Keys travel with a single scan request and are never written to the Pinpoint server, the cache, or the log.
+        - generic [ref=f1e93]:
+          - generic [ref=f1e94]:
+            - generic [ref=f1e95]: Groq
+            - textbox "gsk_... - fastest inference" [ref=f1e96]
+          - generic [ref=f1e97]:
+            - generic [ref=f1e98]: Gemini
+            - textbox "AIza... - Google DeepMind" [ref=f1e99]
+          - generic [ref=f1e100]:
+            - generic [ref=f1e101]: OpenAI
+            - textbox "sk-... - GPT vision" [ref=f1e102]
+        - generic [ref=f1e103] [cursor=pointer]:
+          - 'checkbox "Keep keys on this device Off by default: keys are held in memory and cleared when the tab closes. Turning this on and pressing Save writes them to this browser''s local storage." [ref=f1e104]'
+          - generic [ref=f1e105]:
+            - text: Keep keys on this device
+            - generic [ref=f1e106]: "Off by default: keys are held in memory and cleared when the tab closes. Turning this on and pressing Save writes them to this browser's local storage."
+        - generic [ref=f1e107]:
+          - generic [ref=f1e108]:
+            - generic [ref=f1e109]: Models
+            - generic [ref=f1e113]: Auto ladder
+          - paragraph [ref=f1e114]: The engine consults models in its own accuracy order and goes with the answer they agree on. Pick models below to take control.
+          - generic [ref=f1e115]:
+            - generic [ref=f1e116]:
+              - generic [ref=f1e117]: Geminitest the link to unlock
+              - generic [ref=f1e118]: Google DeepMind
+            - generic [ref=f1e119]:
+              - combobox [disabled] [ref=f1e120]:
+                - option "Auto ladder (recommended)" [selected]
+                - option "Pro"
+                - option "Flash"
+                - option "Flash-Lite"
+              - paragraph [ref=f1e121]: Pro · Flash · Flash-Lite
+          - generic [ref=f1e122]:
+            - generic [ref=f1e123]:
+              - generic [ref=f1e124]: OpenAItest the link to unlock
+              - generic [ref=f1e125]: GPT vision family
+            - generic [ref=f1e126]:
+              - combobox [disabled] [ref=f1e127]:
+                - option "Auto ladder (recommended)" [selected]
+                - option "Flagship"
+                - option "Balanced"
+                - option "Cheap"
+                - option "Legacy"
+              - paragraph [ref=f1e128]: Flagship · Balanced · Cheap · Legacy
+          - generic [ref=f1e129]:
+            - generic [ref=f1e130]:
+              - generic [ref=f1e131]: Groqtest the link to unlock
+              - generic [ref=f1e132]: fastest inference
+            - generic [ref=f1e133]:
+              - combobox [disabled] [ref=f1e134]:
+                - option "Auto ladder (recommended)" [selected]
+                - option "Fast"
+              - paragraph [ref=f1e135]: Fast
+          - generic [ref=f1e136]:
+            - generic [ref=f1e137]:
+              - generic [ref=f1e138]: Offline
+              - generic [ref=f1e139]: no key, no network, no cost
+            - paragraph [ref=f1e140]: weights cached; answers with no network
+            - generic [ref=f1e141]:
+              - combobox [ref=f1e142] [cursor=pointer]:
+                - option "Auto ladder (recommended)" [selected]
+                - option "Auto"
+                - option "GeoCLIP"
+                - option "CLIP zero-shot"
+              - paragraph [ref=f1e143]: Auto · GeoCLIP · CLIP zero-shot
+        - generic [ref=f1e144]:
+          - button "Test Links" [ref=f1e145]
+          - button "Clear" [disabled] [ref=f1e146]
+      - generic [ref=f1e150]:
+        - generic [ref=f1e151]: Interface Accent Spectrum
+        - generic [ref=f1e152]:
+          - button "red accent" [ref=f1e153]
+          - button "blue accent" [ref=f1e154]
+          - button "green accent" [ref=f1e155]
+          - button "purple accent" [ref=f1e156]
+          - button "orange accent" [ref=f1e157]
+      - generic [ref=f1e158]:
+        - generic [ref=f1e159]: Map Vision Mode
+        - generic [ref=f1e160]:
+          - button "dark" [ref=f1e161]
+          - button "light" [ref=f1e162]
+          - button "satellite" [ref=f1e163]
+      - generic [ref=f1e164]:
+        - generic [ref=f1e165]: Imagery Detail
+        - generic [ref=f1e166]:
+          - button "Auto" [ref=f1e167]
+          - button "Balanced" [ref=f1e168]
+          - button "Sharp" [ref=f1e169]
+        - paragraph [ref=f1e170]: Picks the sharpest imagery that exists at the scanned location
+      - generic [ref=f1e171]:
+        - generic [ref=f1e172]: Targeting AI Engine
+        - combobox [ref=f1e173] [cursor=pointer]:
+          - option "Automatic" [selected]
+          - option "Gemini-Only"
+          - option "Groq-Only"
+          - option "OpenAI-Only"
+          - option "Offline AI Engine"
+        - paragraph [ref=f1e174]: The offline engine runs entirely on this machine and needs no key and no network once its weights are prepared, but it cannot crack world seeds and its accuracy is far below the cloud tiers.
+      - generic [ref=f1e175]: Pinpoint OS // Core System Panel Active
+      - generic [ref=f1e176]:
+        - generic [ref=f1e177]:
+          - generic [ref=f1e178]: Nothing saved yet
+          - generic [ref=f1e182]: Saved to this browser only. Nothing is sent to the server.
+        - generic [ref=f1e183]:
+          - button "Discard" [disabled] [ref=f1e184]
+          - button "Save" [disabled] [ref=f1e188]
+  - alert [ref=f1e71]

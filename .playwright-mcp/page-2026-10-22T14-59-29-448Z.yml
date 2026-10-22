@@ -1,0 +1,34 @@
+- generic [active] [ref=f2e1]:
+  - main [ref=f2e2]:
+    - generic [ref=f2e5]:
+      - region "Map" [ref=f2e6]
+      - group [ref=f2e7]:
+        - generic "Toggle attribution" [ref=f2e8] [cursor=pointer]
+        - link "MapLibre" [ref=f2e10] [cursor=pointer]:
+          - /url: https://maplibre.org/
+    - navigation:
+      - generic [ref=f2e11]:
+        - button "World Discovery" [ref=f2e12]
+        - button "Neural Scanner" [ref=f2e15]
+    - generic [ref=f2e19]:
+      - generic [ref=f2e20]:
+        - generic [ref=f2e21]:
+          - heading "IDENTIFIER" [level=2] [ref=f2e22]
+          - generic [ref=f2e28]: Core Engine v2.0
+        - generic [ref=f2e29]:
+          - button "Real World" [ref=f2e30]
+          - button "Gaming" [ref=f2e31]
+      - generic [ref=f2e32]:
+        - generic [ref=f2e39] [cursor=pointer]:
+          - paragraph [ref=f2e40]: Initialize Imagery
+          - paragraph [ref=f2e41]: Upload photo for neural scan
+        - button "INITIALIZE NEURAL SCAN" [disabled] [ref=f2e42]
+      - generic [ref=f2e48]:
+        - paragraph [ref=f2e49]: Pinpoint Intelligence
+        - paragraph [ref=f2e50]: Universal Geolocation Helper active.
+    - generic [ref=f2e51]:
+      - button "Open discovery vault" [ref=f2e52]
+      - button "Toggle theme" [ref=f2e57]
+      - button "Open settings" [ref=f2e64]
+      - button "Open system information" [ref=f2e68]
+  - alert [ref=f2e71]
