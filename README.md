@@ -3,7 +3,6 @@
 
 [![Next.js](https://img.shields.io/badge/Frontend-Next.js%2016-black?style=for-the-badge&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Redis](https://img.shields.io/badge/Cache-Upstash%20Redis-red?style=for-the-badge&logo=redis&logoColor=white)](https://upstash.com/)
 [![Vercel](https://img.shields.io/badge/Deploy-Vercel-black?style=for-the-badge&logo=vercel&logoColor=white)](https://vercel.com/)
 [![MIT License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
 
@@ -124,7 +123,7 @@ Protects API rate limits and accelerates repeated scans:
 *   **Image Hash Cache:** Computes an MD5 of each upload. Identical pictures bypass the AI stack entirely and return the cached answer.
 *   **Geocode Cache:** Saves found coordinates so Nominatim is not re-contacted for the same place.
 
-Redis is reached through a single `REDIS_URL` (e.g. Upstash). When `REDIS_URL` is unset or unreachable, the engine runs stateless with no cache at all — there is no second "local" cache layer, and cache hits are never truly 0ms (they are a Redis round trip within TTL).
+Redis is reached through a single `REDIS_URL`. When `REDIS_URL` is unset or unreachable, the engine runs stateless with no cache at all — there is no second "local" cache layer, and cache hits are never truly 0ms (they are a Redis round trip within TTL).
 
 Cache entries are namespaced by a one-way fingerprint of the keys that produced them, so BYOK results stay separate from shared results. TTLs: image answers 7 days, geocodes 30 days.
 
@@ -323,7 +322,7 @@ vercel deploy --prod
 
 Environment variables (all optional — operators can bring their own keys):
 
-* `REDIS_URL` — an Upstash connection string for the image and geocode cache
+* `REDIS_URL` — optional Redis connection string for the image and geocode cache
 * `GROQ_API_KEY`, `GOOGLE_API_KEY`, `OPENAI_API_KEY` — server-side keys
 * `ALLOWED_ORIGINS` — your frontend's domain
 
@@ -372,15 +371,8 @@ from HuggingFace on every cold start), and persistent disks are paid-only —
 the first paid tier is $7/mo and still too small. Render's own docs say
 *"Do not use them for production applications."*
 
-### Phase 1: Cache (Upstash)
-
-1. Register at [Upstash.com](https://upstash.com).
-2. Create a serverless Redis database.
-3. Copy the connection URL (`rediss://default:...`) into `REDIS_URL`.
-
-Optional. Without it the API runs statelessly and just re-does the geocoding.
-
 ---
+
 
 ## 💻 Local Development Quickstart
 
@@ -443,7 +435,7 @@ Probes every rung against its provider and prints which ones are reachable.
 *   **Database & Frameworks:**
     *   **FastAPI & Uvicorn** for the backend async routing engine.
     *   **Next.js & TailwindCSS** for the gorgeous "Neural OS" glassmorphism dashboard.
-    *   **Upstash** for the lightning-fast serverless Redis caching layer.
+
 
 ---
 
